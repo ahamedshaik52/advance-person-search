@@ -1,0 +1,158 @@
+////////////////////////ALPT_2630//////////////////////////
+Build Advanced Person Search Algorithm Using a Multi-Field Search Screen <Enabler>
+
+Key details
+Story
+
+As an Administration Product Team Developer working on the Advanced Person Search in IllinoisConnect, I must be able to enter search criteria through a multi-field search screen that captures the same core identifiers planned for the future single-line search experience, so that the system can support development, validation, and testing of the search algorithm before it is applied to the single-line search bar.
+Acceptance Criteria
+
+Acceptance Criteria 1 – Navigate to the Multi-Field Advanced Person Search Screen
+
+Given that I am in the IllinoisConnect system,
+When I click on the “Advanced Person Search” option in the left-hand navigation panel,
+Then the system will:
+
+Navigate me directly to the Advanced Person Search screen
+
+Display a multi-field search layout for entering person search criteria
+
+Provide separate fields for the supported search identifiers needed to develop the search algorithm
+
+Acceptance Criteria 2 – Display Core Search Fields for Algorithm Development
+
+Given I am on the Advanced Person Search screen,
+When the screen loads,
+Then the system will display separate search fields for the following identifiers:
+
+First Name
+
+Last Name
+
+Date of Birth
+
+Social Security Number (SSN)
+
+Person ID
+
+Phone Number
+
+Address
+
+Gender
+
+Race
+
+Acceptance Criteria 3 – Allow Search Using Minimum Required Search Criteria
+
+Given I am on the Advanced Person Search screen,
+When I enter at least one valid identifier in any supported search field,
+And I click the Search button,
+Then the system will allow the search to execute.
+
+Acceptance Criteria 4 – Prevent Empty Search Execution
+
+Given I am on the Advanced Person Search screen,
+When I click the Search button without entering any valid values into the available search fields,
+Then the system will not execute the search,
+And will display a validation message instructing me to enter at least one valid search identifier.
+
+Acceptance Criteria 5 – Support Field-Level Validation Rules
+
+Given I am entering search criteria on the Advanced Person Search screen,
+When I populate the available fields,
+Then the system will apply the following validation rules:
+
+First Name must allow entry of at least 1 character
+
+Last Name must allow entry of at least 1 character
+
+Date of Birth must accept values in MM/DD/YYYY, MM/YYYY, or YYYY format
+
+SSN must accept either the full 9-digit value
+
+Person ID must be numeric and contain at least 2 digits
+
+Business Rules
+
+
+The system will not execute a search unless at least one valid search identifier is entered.
+
+First Name or Last Name must have a minimum of one character.
+
+Date of Birth must be entered in MM/DD/YYYY, MM/YYYY, or YYYY format only.
+
+SSN must be entered as either the full 9-digit number or last 4 digits.
+
+Person ID must be numeric and contain at least two digits.
+
+///////// End of APLT-2630////////////////////////////////////
+
+
+///////////////////////////////////////////////////////
+
+
+/////////////////////////ALPT-2631///////////////////////////
+
+
+Execute Advanced Person Search Using Demographic Identifiers via Multi-Field Search Screen <Enabler>
+
+
+
+
+Key details
+Story
+
+As an Administration Product Team developer conducting a Person Search in IllinoisConnect, I will be able to enter valid demographic identifiers across a multi-field search screen and execute a search, so that the system can retrieve matching person records and support development of the Advanced Person Search algorithm before it is applied to the single-line search bar.
+Acceptance Criteria
+
+Acceptance Criteria 1 – Enter Search Criteria Across Multiple Fields
+Given I am on the Advanced Person Search screen,
+When I enter one or more identifiers into the available search fields such as:
+
+First Name
+
+Last Name
+
+Address
+
+SSN
+
+Date of Birth
+
+Person ID
+
+Phone Number
+
+And I click Search,
+Then the system must capture and process each field for search execution.
+
+Acceptance Criteria 2 – Execute Search Using Valid Demographic Identifiers
+Given I am on the Advanced Person Search screen,
+When I enter one or more valid identifiers across the available fields,
+And I click Search,
+Then the system must execute the search,
+And return person records that match the provided demographic identifiers.
+
+Acceptance Criteria 3 – Apply Minimum Search Criteria Validation
+Given I am on the Advanced Person Search screen,
+When I attempt to perform a search,
+Then the system must require at least one valid identifier to be entered across the available fields before executing the search.
+
+Acceptance Criteria 4 – No Results Found
+Given I am on the Advanced Person Search screen,
+When I enter valid search criteria and execute the search,
+And no person records match the entered criteria,
+Then the system must display the message at the top of the results screen:
+“No Matching Person Records Were Found in the System.”
+And keep the results grid empty.
+
+Acceptance Criteria 5 – Align Multi-Field Search with Future Single-Line Behavior
+Given the multi-field search screen is being used as an interim solution,
+When the search logic is executed using the individual fields,
+Then the system must ensure that the supported identifiers and validation rules align with those planned for the single-line search bar,
+So that the algorithm can be transitioned without rework.
+
+
+///////// End of APLT-2631////////////////////////////////////
+
