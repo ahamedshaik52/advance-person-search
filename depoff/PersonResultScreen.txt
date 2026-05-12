@@ -1,0 +1,506 @@
+Screens:
+  PersonResultsScreen:
+    Properties:
+      Fill: =RGBA(255, 255, 255, 1)
+      LoadingSpinnerColor: =RGBA(0, 120, 212, 1)
+      OnVisible: |-
+        =Set(PageSize, 16);
+        Set(CurrentPage, 1);
+        Set(TotalPages, RoundUp(CountRows(colAPS_Results_Flat) / PageSize, 0));
+
+        ClearCollect(
+            GenderLookup,
+            { Code: 471560000, Label: "Male"},
+            { Code: 471560001, Label: "Female"},
+            { Code: 471560002, Label: "Unknown"}
+        );
+    Children:
+      - ScreenContainer2:
+          Control: GroupContainer@1.5.0
+          Variant: AutoLayout
+          Properties:
+            Fill: =RGBA(245, 245, 245, 1)
+            Height: =Parent.Height
+            LayoutAlignItems: =LayoutAlignItems.Stretch
+            LayoutDirection: =LayoutDirection.Vertical
+            LayoutGap: =16
+            PaddingBottom: =16
+            PaddingLeft: =16
+            PaddingRight: =16
+            PaddingTop: =16
+            Width: =Parent.Width
+          Children:
+            - HeaderContainer1:
+                Control: GroupContainer@1.5.0
+                Variant: AutoLayout
+                Properties:
+                  Fill: =RGBA(255, 255, 255, 1)
+                  FillPortions: =0
+                  Height: =75
+                  LayoutAlignItems: =LayoutAlignItems.Center
+                  LayoutDirection: =LayoutDirection.Horizontal
+                  LayoutMinHeight: =16
+                  LayoutMinWidth: =16
+                  PaddingBottom: =8
+                  PaddingLeft: =8
+                  PaddingRight: =8
+                  PaddingTop: =8
+                  RadiusBottomLeft: =8
+                  RadiusBottomRight: =8
+                  RadiusTopLeft: =8
+                  RadiusTopRight: =8
+            - MainContainer1:
+                Control: GroupContainer@1.5.0
+                Variant: AutoLayout
+                Properties:
+                  Fill: =RGBA(255, 255, 255, 1)
+                  LayoutAlignItems: =LayoutAlignItems.Center
+                  LayoutDirection: =LayoutDirection.Vertical
+                  LayoutMinHeight: =16
+                  LayoutMinWidth: =16
+                  PaddingBottom: =8
+                  PaddingLeft: =8
+                  PaddingRight: =8
+                  PaddingTop: =8
+                  RadiusBottomLeft: =8
+                  RadiusBottomRight: =8
+                  RadiusTopLeft: =8
+                  RadiusTopRight: =8
+                Children:
+                  - Container3:
+                      Control: GroupContainer@1.5.0
+                      Variant: AutoLayout
+                      Properties:
+                        BorderColor: =RGBA(0, 0, 0, 0)
+                        DropShadow: =DropShadow.None
+                        FillPortions: =0
+                        Height: =30
+                        LayoutAlignItems: =LayoutAlignItems.Center
+                        LayoutDirection: =LayoutDirection.Horizontal
+                        LayoutMinHeight: =16
+                        LayoutMinWidth: =16
+                        PaddingBottom: =8
+                        PaddingLeft: =8
+                        PaddingRight: =8
+                        PaddingTop: =8
+                        RadiusBottomLeft: =0
+                        RadiusBottomRight: =0
+                        RadiusTopLeft: =0
+                        RadiusTopRight: =0
+                      Children:
+                        - Label5:
+                            Control: FluentV8/Label@1.8.6
+                            Properties:
+                              AlignInContainer: =AlignInContainer.End
+                              Alignment: =Align.Left
+                              FontSize: =14
+                              FontWeight: =FontWeight.Semibold
+                              Height: =25
+                              LayoutMinHeight: =16
+                              LayoutMinWidth: =16
+                              Text: ="Search Results"
+                              VerticalAlignment: =VerticalAlign.Top
+                  - Container4:
+                      Control: GroupContainer@1.5.0
+                      Variant: AutoLayout
+                      Properties:
+                        BorderColor: =RGBA(0, 0, 0, 0)
+                        DropShadow: =DropShadow.None
+                        FillPortions: =0
+                        Height: =50
+                        LayoutAlignItems: =LayoutAlignItems.Center
+                        LayoutDirection: =LayoutDirection.Horizontal
+                        LayoutMinHeight: =16
+                        LayoutMinWidth: =16
+                        PaddingBottom: =8
+                        PaddingLeft: =8
+                        PaddingRight: =8
+                        PaddingTop: =8
+                      Children:
+                        - LayoutToggle:
+                            Control: FluentV8/Toggle@1.6.7
+                            Properties:
+                              Checked: =true
+                              FontSize: =12
+                              Height: =25
+                              LayoutMinHeight: =16
+                              LayoutMinWidth: =16
+                              OffText: ="List View"
+                              OnText: ="Card View"
+                              Width: =145
+                        - ResultsNumber:
+                            Control: FluentV8/Label@1.8.6
+                            Properties:
+                              FontSize: =11
+                              LayoutMinHeight: =16
+                              LayoutMinWidth: =16
+                              Text: |-
+                                =If(
+                                    LayoutToggle.Checked,
+                                    Concatenate("Search Results ", "(", CountRows((colAPS_Results_Flat)), ")"),
+                                    "Search Results (0)"
+                                )
+                              Width: =150
+                              Wrap: =false
+                        - Label18:
+                            Control: FluentV8/Label@1.8.6
+                            Properties:
+                              LayoutMinHeight: =16
+                              LayoutMinWidth: =16
+                              Text: |-
+                                =If( 
+                                    LayoutToggle.Checked,
+                                    "Showing " & ((CurrentPage - 1) * PageSize + 1) & " of " & Min(CurrentPage * PageSize, CountRows(colAPS_Results_Flat)),
+                                    " "
+                                )
+                        - Container2:
+                            Control: GroupContainer@1.5.0
+                            Variant: AutoLayout
+                            Properties:
+                              BorderColor: =RGBA(0, 0, 0, 0)
+                              DropShadow: =DropShadow.None
+                              LayoutAlignItems: =LayoutAlignItems.Center
+                              LayoutDirection: =LayoutDirection.Horizontal
+                              LayoutMinHeight: =16
+                              LayoutMinWidth: =16
+                              PaddingBottom: =8
+                              PaddingLeft: =8
+                              PaddingRight: =8
+                              PaddingTop: =8
+                            Children:
+                              - Container6:
+                                  Control: GroupContainer@1.5.0
+                                  Variant: AutoLayout
+                                  Properties:
+                                    BorderColor: =RGBA(0, 0, 0, 0)
+                                    DropShadow: =DropShadow.None
+                                    LayoutAlignItems: =LayoutAlignItems.Center
+                                    LayoutDirection: =LayoutDirection.Horizontal
+                                    LayoutMinHeight: =16
+                                    LayoutMinWidth: =16
+                                    PaddingBottom: =8
+                                    PaddingLeft: =8
+                                    PaddingRight: =8
+                                    PaddingTop: =8
+                              - Icon3:
+                                  Control: Classic/Icon@2.5.0
+                                  Properties:
+                                    BorderColor: =RGBA(0, 0, 0, 0)
+                                    Color: =RGBA(0, 120, 212, 1)
+                                    DisabledColor: =RGBA(220, 220, 220, 1)
+                                    DisabledFill: =RGBA(0, 0, 0, 0)
+                                    DisplayMode: =If(CurrentPage = 1, DisplayMode.Disabled, DisplayMode.Edit)
+                                    Height: =32
+                                    HoverBorderColor: =RGBA(0, 0, 0, 0)
+                                    HoverColor: =ColorFade(RGBA(0, 120, 212, 1), -30%)
+                                    HoverFill: =RGBA(0, 0, 0, 0)
+                                    Icon: =Icon.ArrowLeft
+                                    LayoutMinHeight: =16
+                                    LayoutMinWidth: =16
+                                    OnSelect: =Set(CurrentPage, Max(CurrentPage - 1))
+                                    PaddingBottom: =3
+                                    PaddingLeft: =3
+                                    PaddingRight: =3
+                                    PaddingTop: =3
+                                    PressedBorderColor: =RGBA(0, 0, 0, 0)
+                                    PressedColor: =ColorFade(RGBA(0, 120, 212, 1), -30%)
+                                    PressedFill: =RGBA(0, 0, 0, 0)
+                                    Width: =32
+                              - Gallery2:
+                                  Control: Gallery@2.15.0
+                                  Variant: Horizontal
+                                  Properties:
+                                    AlignInContainer: =AlignInContainer.Center
+                                    BorderColor: =RGBA(166, 166, 166, 1)
+                                    FillPortions: =0
+                                    FocusedBorderColor: =RGBA(0, 120, 212, 1)
+                                    FocusedBorderThickness: =2
+                                    Height: =30
+                                    Items: |-
+                                      =ForAll(
+                                          Sequence(TotalPages),
+                                          {PageNumber: Value}
+                                      )
+                                    ShowScrollbar: =false
+                                    TemplatePadding: =4
+                                    TemplateSize: =20
+                                    Width: |+
+                                      =CountRows(Self.AllItems) * 25
+                                    WrapCount: |+
+                                      =1
+                                  Children:
+                                    - Button2:
+                                        Control: FluentV8/Button@1.5.13
+                                        Properties:
+                                          ButtonType: ='Button.ButtonType'.Standard
+                                          Height: =22
+                                          OnSelect: =Set(CurrentPage, ThisItem.PageNumber)
+                                          Text: =ThisItem.PageNumber
+                                          TextColor: =If(ThisItem.PageNumber = CurrentPage, Color.Black, Color.Gray)
+                                          Width: =20
+                              - Icon4:
+                                  Control: Classic/Icon@2.5.0
+                                  Properties:
+                                    BorderColor: =RGBA(0, 0, 0, 0)
+                                    Color: =RGBA(0, 120, 212, 1)
+                                    DisabledColor: =RGBA(220, 220, 220, 1)
+                                    DisabledFill: =RGBA(0, 0, 0, 0)
+                                    DisplayMode: =If(CurrentPage = TotalPages, DisplayMode.Disabled, DisplayMode.Edit)
+                                    Height: =32
+                                    HoverBorderColor: =RGBA(0, 0, 0, 0)
+                                    HoverColor: =ColorFade(RGBA(0, 120, 212, 1), -30%)
+                                    HoverFill: =RGBA(0, 0, 0, 0)
+                                    Icon: =Icon.ArrowRight
+                                    LayoutMinHeight: =16
+                                    LayoutMinWidth: =16
+                                    OnSelect: =Set(CurrentPage, CurrentPage + 1)
+                                    PaddingBottom: =3
+                                    PaddingLeft: =3
+                                    PaddingRight: =3
+                                    PaddingTop: =3
+                                    PressedBorderColor: =RGBA(0, 0, 0, 0)
+                                    PressedColor: =ColorFade(RGBA(0, 120, 212, 1), -30%)
+                                    PressedFill: =RGBA(0, 0, 0, 0)
+                                    Width: =32
+                  - Container5:
+                      Control: GroupContainer@1.5.0
+                      Variant: AutoLayout
+                      Properties:
+                        BorderColor: =RGBA(0, 0, 0, 0)
+                        DropShadow: =DropShadow.None
+                        FillPortions: =0
+                        Height: =545
+                        LayoutAlignItems: =LayoutAlignItems.Center
+                        LayoutDirection: =LayoutDirection.Horizontal
+                        LayoutMinHeight: =16
+                        LayoutMinWidth: =16
+                        PaddingBottom: =8
+                        PaddingLeft: =8
+                        PaddingRight: =8
+                        PaddingTop: =8
+                      Children:
+                        - CardGallery:
+                            Control: Gallery@2.15.0
+                            Variant: Vertical
+                            Properties:
+                              BorderColor: =RGBA(166, 166, 166, 1)
+                              FocusedBorderColor: =RGBA(0, 120, 212, 1)
+                              FocusedBorderThickness: =2
+                              Height: =545
+                              Items: |+
+                                =/*PeopleJSON*/
+                                /*FirstN(
+                                    DropColumns(
+                                        AddColumns(
+                                            PeopleJSON,
+                                            RowNumber,
+                                            CountRows(
+                                                Filter(
+                                                    PeopleJSON,
+                                                    Value(IdPerson) <= Value(ThisRecord.IdPerson)
+                                                )
+                                            )
+                                        ),
+                                        RowNumber
+                                    ),
+                                    PageSize
+                                )*/
+
+                                /*With(
+                                    {
+                                        indexed: AddColumns(
+                                            PeopleJSON,
+                                            RowNumber,
+                                            CountRows(
+                                                Filter(
+                                                    PeopleJSON,
+                                                    PersonId = ThisRecord.PersonId
+                                                )
+                                            )
+                                        )
+                                    },
+                                    Filter(
+                                        indexed,
+                                        RowNumber > (CurrentPage - 1) * PageSize &&
+                                        RowNumber <= CurrentPage * PageSize
+                                    )
+                                )*/
+
+                                /*With(
+                                    {
+                                        sorted: PeopleJSON,
+                                        indexed: AddColumns(
+                                            PeopleJSON,
+                                            RowNumber,
+                                            CountRows(
+                                                Filter(
+                                                    PeopleJSON,
+                                                    Value(IdPerson) <= Value(ThisRecord.IdPerson)
+                                                )
+                                            )
+                                        )
+                                    },
+                                    Filter(
+                                        indexed,
+                                        RowNumber > (CurrentPage) * PageSize
+                                    )
+                                )*/
+
+                                /*With(
+                                    {
+                                        indexed: AddColumns(
+                                            PeopleJSON,
+                                            RowNumber,
+                                            CountRows(
+                                                Filter(
+                                                    PeopleJSON,
+                                                    Value(IdPerson) <= Value(ThisRecord.IdPerson)
+                                                )
+                                            )
+                                        )
+                                    },
+                                    Filter(
+                                        indexed,
+                                        RowNumber > (CurrentPage - 1) * PageSize &&
+                                        RowNumber <= CurrentPage * PageSize
+                                    )
+                                )*/
+
+                                With(
+                                    {
+                                        SortedData: Sort(
+                                            colAPS_Results_Flat,
+                                            Value(PersonID),
+                                            SortOrder.Ascending
+                                        )
+                                    },
+                                    FirstN(
+                                        LastN(
+                                            SortedData,
+                                            CountRows(SortedData) - ((CurrentPage - 1) * PageSize)
+                                        ),
+                                        PageSize
+                                    )
+                                )
+
+
+
+
+                              LayoutMinHeight: =16
+                              LayoutMinWidth: =16
+                              ShowScrollbar: =false
+                              TemplatePadding: =1
+                              TemplateSize: =530/4
+                              Visible: =LayoutToggle.Checked
+                              WrapCount: =4
+                            Children:
+                              - Container7:
+                                  Control: GroupContainer@1.5.0
+                                  Variant: AutoLayout
+                                  Properties:
+                                    Height: =120
+                                    LayoutAlignItems: =LayoutAlignItems.Center
+                                    LayoutDirection: =LayoutDirection.Horizontal
+                                    LayoutJustifyContent: =LayoutJustifyContent.SpaceBetween
+                                    PaddingLeft: =8
+                                    PaddingRight: =8
+                                    Width: =319.25
+                              - FullName:
+                                  Control: FluentV8/Label@1.8.6
+                                  Properties:
+                                    FontSize: =12
+                                    FontWeight: =FontWeight.Semibold
+                                    OnSelect: =Select(Parent)
+                                    Text: |-
+                                      =If(
+                                          IsBlank(ThisItem.DisplayName),
+                                          "N/A",
+                                          ThisItem.DisplayName
+                                      )
+                                    X: =4
+                                    Y: =1
+                              - dobCard:
+                                  Control: FluentV8/Label@1.8.6
+                                  Properties:
+                                    OnSelect: =Select(Parent)
+                                    Text: |-
+                                      =If(
+                                          IsBlank(ThisItem.DOB),
+                                          "N/A",
+                                          Text((ThisItem.DOB), "mm/dd/yyyy")
+                                      )
+                                    Width: =86
+                                    X: =8
+                                    Y: =34
+                              - gender:
+                                  Control: FluentV8/Label@1.8.6
+                                  Properties:
+                                    OnSelect: =Select(Parent)
+                                    Text: |-
+                                      =If(
+                                          IsBlank(ThisItem.SexLabel),
+                                          "N/A",
+                                          ThisItem.SexLabel
+                                      )
+                                    Width: =70
+                                    X: =94
+                                    Y: =34
+                              - personId:
+                                  Control: FluentV8/Label@1.8.6
+                                  Properties:
+                                    OnSelect: =Select(Parent)
+                                    Text: |-
+                                      =If(
+                                          IsBlank(ThisItem.PersonID),
+                                          "N/A",
+                                          ThisItem.PersonID
+                                      )
+                                    Width: =97
+                                    X: =180
+                                    Y: =34
+                              - address:
+                                  Control: FluentV8/Label@1.8.6
+                                  Properties:
+                                    Height: =47
+                                    OnSelect: =Select(Parent)
+                                    Text: |-
+                                      =If(
+                                          IsBlank(ThisItem.FullAddress),
+                                          "N/A",
+                                          ThisItem.FullAddress
+                                      )
+                                    Width: =187
+                                    X: =8
+                                    Y: =73
+                              - viewDetails:
+                                  Control: FluentV8/Button@1.5.13
+                                  Properties:
+                                    OnSelect: =Select(Parent)
+                                    Text: ="View Details"
+                                    X: =213
+                                    Y: =86
+                  - Container9:
+                      Control: GroupContainer@1.5.0
+                      Variant: AutoLayout
+                      Properties:
+                        BorderColor: =RGBA(0, 0, 0, 0)
+                        DropShadow: =DropShadow.None
+                        FillPortions: =0
+                        Height: =30
+                        LayoutAlignItems: =LayoutAlignItems.Center
+                        LayoutDirection: =LayoutDirection.Horizontal
+                        LayoutMinHeight: =16
+                        LayoutMinWidth: =16
+                        PaddingBottom: =8
+                        PaddingLeft: =8
+                        PaddingRight: =8
+                        PaddingTop: =8
+                      Children:
+                        - Label17:
+                            Control: FluentV8/Label@1.8.6
+                            Properties:
+                              LayoutMinHeight: =16
+                              LayoutMinWidth: =16
+                              Text: =Concatenate(CurrentPage, " / ", TotalPages, " Pages")
+                              Width: =100
+                              Wrap: =false
