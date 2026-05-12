@@ -1,0 +1,74 @@
+////////////////ALPT_2635 requirment/////////////////
+Conduct Advanced Person Search Using Fuzzy/Soundex Capability via Multi-Field Search Screen <Enabler>
+
+Key details:
+	Story:
+As an Administration Product Team Developer on the Advanced Person Search screen, I will be able to conduct a Person Search using fuzzy and phonetic (Soundex) matching logic through a multi-field search screen, so that I can find Person Records even when exact spelling, formatting, or pronunciation of identifiers is not known, while supporting development of search algorithm logic before it is applied to the single-line search bar.
+Acceptance Criteria
+
+Acceptance Criteria 1 – Display Search Fields and Default Matching Behavior
+Given I am on the Advanced Person Search screen,
+When the screen loads,
+Then the system must display the following search fields:
+
+First Name
+
+Last Name
+
+Date of Birth
+
+Person ID
+
+Address
+	Address Line 1 
+	Address Line 2
+	city
+	state
+	Zip code
+	county
+
+Phone Number
+
+SSN
+
+Gender
+
+Race
+
+And provide an “Exact Matches Only” toggle or checkbox,
+And when the toggle is not selected, the system must default to fuzzy and phonetic (Soundex) matching logic.
+
+Acceptance Criteria 2 – Fuzzy Search Using Single Identifier
+Given I am on the Advanced Person Search screen with Exact Matches Only not selected,
+When I enter a value in any one of the available fields with minor variations like spelling differences, typos, or formatting differences,
+And I click Search,
+Then the system must return Person Records that closely match the entered value,
+Even if there are minor differences in spelling, character sequence, or formatting.
+
+Acceptance Criteria 3 – Fuzzy Search Using Multiple Identifiers
+Given I am on the Advanced Person Search screen with Exact Matches Only not selected,
+When I enter values across two or more fields,
+And I click Search,
+Then the system must return Person Records that closely match the combination of entered identifiers,
+Even if there are minor variations such as spelling errors or typingl differences.
+
+Acceptance Criteria 4 – Phonetic Matching (Soundex Support)
+Given I am on the Advanced Person Search screen,
+When I enter a value in any of the fields,
+And I click Search,
+Then the system must return Person Records where the stored values sound similar to the entered value,
+Even if the spelling differs.
+
+Acceptance Criteria 5 – Align Fuzzy Matching with Future Single-Line Search
+Given the multi-field search screen is being used as an interim solution,
+When fuzzy and phonetic matching logic is applied,
+Then the system must ensure that this behavior aligns with the future single-line search bar,
+So that the search algorithm can be transitioned without rework.
+
+Business Rules:
+
+Fuzzy matching must allow for minor spelling differences, typographical errors, and formatting variations.
+
+When Exact Matches Only is not selected, fuzzy and phonetic logic must be applied by default.
+
+Matching must support both single-field and multi-field searches.
