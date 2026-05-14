@@ -1,432 +1,666 @@
 ---
 
-# Q1 — ARCHITECTURE ANSWER
-## Why Native Power Fx Cannot Meet AC2–AC4 (and What Must Replace It)
+# FULL PLUGIN APPROACH — 🅑
+## Prerequisites · Access Verification · Full Architecture
 
 ---
 
-### The Root Problem — Three Compounding Limitations
+## SECTION 1 — PREREQUISITES
 
-**Limitation 1: Power Fx has no fuzzy or phonetic functions.**
-Every text function in Power Fx is exact:
-
-| Function | Behavior |
-|---|---|
-| `StartsWith()` | Exact prefix match |
-| `EndsWith()` | Exact suffix match |
-| `Find()` | Exact substring match |
-| `IsMatch()` | Exact regex pattern match |
-
-There is no `Soundex()`, no Levenshtein distance, no phonetic encoder, no fuzzy operator of any kind. AC2, AC3, and AC4 are architecturally impossible in pure Power Fx.
-
-**Limitation 2: Dataverse OData does not support fuzzy or phonetic operators.**
-Even if Power Fx could express a fuzzy query, the Dataverse connector's `Filter()` delegation translates to OData `$filter`. OData has no `~fuzzy`, no `soundsLike`, no edit-distance predicate. The delegation chain breaks before the query even leaves the app.
-
-**Limitation 3: Scale disqualifies all client-side workarounds.**
-With a confirmed growth trajectory of 100,000+ records, pulling data down to the client and filtering locally is not acceptable — it would exceed Power Apps collection limits (2,000 rows), saturate network bandwidth, and produce multi-second load times. Every filter operation must execute server-side.
+Everything you need before writing a single line of plugin code, grouped by category.
 
 ---
 
-### Recommendation — The Correct Architecture
+### 1.1 — Developer Workstation
 
-> **Power Apps → Power Automate Instant Flow → Dual-Path Server-Side Search**
-
-This is the recommended approach for Power Platform enterprise systems requiring fuzzy and phonetic matching at scale. It uses infrastructure already available inside your Microsoft 365 / Power Platform tenant (Dataverse Search is included with Dataverse) and adds one lightweight pre-computation pattern for guaranteed Soundex compliance.
-
----
-
-### How the Architecture Works — Two Layers
-
----
-
-#### Layer 1: Dataverse Search API — Handles AC2 and AC3 (Fuzzy Matching)
-
-**What it is:**
-Dataverse has a built-in search engine exposed at:
-```
-POST [org]/api/data/v9.2/search
-```
-This endpoint is powered internally by **Azure Cognitive Search** (Microsoft manages the index, the infrastructure, and the sync). It is included at no additional cost in your Dataverse subscription.
-
-**Why it solves AC2 and AC3:**
-The Dataverse Search API accepts **Lucene query syntax**, which includes the `~` fuzzy operator:
-
-```
-"Jhon~1"          → matches "John" (1 edit distance — handles typos)
-"Smyth~2"         → matches "Smith" (2 edit distance — handles spelling drift)
-"Jhon~1 Smyth~1"  → multi-field fuzzy — handles AC3 directly
-```
-
-Edit distance (`~1` or `~2`) means the engine accepts strings that differ by up to 1 or 2 character insertions, deletions, substitutions, or transpositions (Damerau-Levenshtein). This precisely maps to AC2 ("minor variations, spelling differences, typos, formatting differences") and AC3 ("values across two or more fields, spelling errors, typing differences").
-
-**Scale:** Azure Cognitive Search backing the Dataverse index handles millions of documents with sub-second response. 100,000+ Persons records is well within its operating range.
-
----
-
-#### Layer 2: Pre-Computed Soundex Columns — Handles AC4 (Phonetic Matching)
-
-**Why Dataverse Search alone is not enough for AC4:**
-The phonetic analyzer configuration of the internal Dataverse Search index is managed entirely by Microsoft — it cannot be customised. There is no guarantee that it applies a Soundex or Metaphone encoder to specific columns. AC4 requires deterministic, guaranteed phonetic matching behaviour.
-
-**The solution — pre-compute and store Soundex at write time:**
-
-| New Column | Table | Type | Example Value |
+| # | Requirement | Version | Where to Get |
 |---|---|---|---|
-| `cw_SoundexFirstName` | Persons | Text (max 10) | `J500` (for "John", "Jhon", "Jon", "Johan") |
-| `cw_SoundexLastName` | Persons | Text (max 10) | `S530` (for "Smith", "Smyth", "Smithe") |
-
-A **separate maintenance Power Automate flow** fires every time a Person record is created or updated. It computes `SOUNDEX(FirstName)` and `SOUNDEX(LastName)` and writes the result back to the two new columns.
-
-At search time, the search service flow computes `SOUNDEX(userInput)` and executes a standard Dataverse `List Rows` action with an exact filter on `cw_SoundexFirstName` and `cw_SoundexLastName`. Because these are plain text column exact matches, this query is **100% delegable to Dataverse** — it scales to any record count with no Power Fx client-side processing.
-
-**Why this approach is correct:**
-- Soundex encoding is a bijective hash: the same name always produces the same code
-- Matching encoded input against encoded stored value is an exact operation — fully delegable
-- Industry standard in demographic search systems (SSA, DMV, law enforcement identity resolution)
-- No external services. No extra cost. Runs entirely within Power Platform
+| P1 | **Visual Studio 2022** | Community or higher | [visualstudio.microsoft.com](https://visualstudio.microsoft.com) |
+| P2 | **.NET Framework 4.6.2 SDK** | 4.6.2 (Dataverse plugin target) | Included with VS2022 or [dotnet.microsoft.com](https://dotnet.microsoft.com) |
+| P3 | **NuGet Package: Microsoft.CrmSdk.CoreAssemblies** | Latest stable | NuGet.org (inside VS) |
+| P4 | **NuGet Package: Microsoft.CrmSdk.XrmTooling.CoreAssembly** | Latest stable | NuGet.org (inside VS) |
+| P5 | **Power Platform CLI (pac)** | Latest | `winget install Microsoft.PowerPlatformCLI` |
+| P6 | **Plugin Registration Tool (PRT)** | Latest | XrmToolBox → Tools → Plugin Registration Tool |
+| P7 | **XrmToolBox** | Latest | [xrmtoolbox.com](https://www.xrmtoolbox.com) |
+| P8 | **Postman** (for Custom API testing) | Latest | [postman.com](https://postman.com) |
 
 ---
 
-### Full Architecture Diagram
+### 1.2 — Dataverse Environment
 
-```
-POWER APPS — Screen1
-│
-│  [User fills 14 search fields]
-│  [tglExactMatch: OFF = fuzzy/phonetic | ON = exact]
-│
-│  btnSearch.OnSelect
-│  ├── Client-side validation (existing) — runs before any server call
-│  └── Trigger Power Automate flow with all inputs + isExactMatch flag
-│
-▼
-POWER AUTOMATE — "ALPT-2635 | Advanced Person Search Service"
-(HTTP-triggered Instant Flow)
-│
-├── IF isExactMatch = TRUE
-│   └── Dataverse "List Rows" (OData exact $filter on all 14 fields)
-│       └── Returns: exact-matched Person rows
-│
-└── IF isExactMatch = FALSE  [fuzzy/phonetic mode]
-    │
-    ├── BRANCH A — Fuzzy Text Matching (AC2 / AC3)
-    │   └── HTTP action → POST Dataverse Search API
-    │       └── Lucene query: "FirstName~1 AND LastName~1" (or any entered fields)
-    │       └── Returns: scored Person IDs (fuzzy match set)
-    │
-    └── BRANCH B — Phonetic Matching (AC4)
-        └── Compute SOUNDEX(inputFirstName), SOUNDEX(inputLastName) [Expression]
-            └── Dataverse "List Rows" → exact filter on
-                cw_SoundexFirstName = computedSoundex
-                cw_SoundexLastName  = computedSoundex
-            └── Returns: phonetically matched Person rows (fully delegable)
-    │
-    ├── Merge Branch A + Branch B results
-    ├── Deduplicate by PersonID
-    └── Hydrate full Person + Address records for merged set
-│
-└── Response action → JSON array → Power Apps
-    (PersonID, DisplayName, DOB, SexLabel, SSN, FullAddress)
-
-▼
-POWER APPS — PersonResultsScreen
-    ClearCollect(colAPS_Results_Flat, powerAutomateResponse.body)
-    Navigate(PersonResultsScreen)
-
-─────────────────────────────────────────────────────────────
-SEPARATE MAINTENANCE FLOW (runs independently)
-"ALPT-2635 | Persons Soundex Maintenance"
-    Trigger: Dataverse row added OR modified (Persons table)
-    Action:  Compute SOUNDEX(FirstName) → write cw_SoundexFirstName
-    Action:  Compute SOUNDEX(LastName)  → write cw_SoundexLastName
-─────────────────────────────────────────────────────────────
-```
+| # | Requirement | Notes |
+|---|---|---|
+| E1 | **Dataverse Search enabled** | Must be ON — powers the fuzzy Lucene query in the plugin |
+| E2 | **Plugin execution allowed** | Environment setting — see verification steps below |
+| E3 | **Outbound HTTP from sandbox plugins** | Dataverse Cloud allows plugins to call the same-org Dataverse Search endpoint |
+| E4 | **Plugin Trace Logging enabled** | Required for debugging during development |
+| E5 | **Unmanaged solution available** | All plugin artifacts, Custom API, and schema changes live in one solution |
+| E6 | **Persons table accessible** | Columns can be added — confirmed (D2) |
 
 ---
 
-### Why Not the Alternatives
+### 1.3 — Security Roles Required
 
-| Option | Why Rejected |
+| Role | Where Needed | Minimum Required |
+|---|---|---|
+| **System Administrator** OR **System Customizer** | Dataverse environment | Register plugin assemblies, create Custom API, add table columns |
+| **Basic User** + **Delegate** | Power Apps testing | Run the Canvas App as a test user |
+| **Power Platform Admin** | Admin Center access | Verify environment settings, enable features |
+
+---
+
+### 1.4 — Artifacts to Be Created (Know Before You Start)
+
+| Artifact | Type | Purpose |
+|---|---|---|
+| `ALPT2635.Plugins.dll` | C# Class Library (.NET 4.6.2) | Contains both plugin classes |
+| `PersonSoundexPlugin` | Plugin class inside DLL | Post-Create + Post-Update on Persons → compute Soundex |
+| `AdvancedPersonSearchPlugin` | Plugin class inside DLL | Executes on Custom API → search logic |
+| `cw_AdvancedPersonSearch` | Dataverse Custom API | The callable endpoint from Power Apps |
+| `cw_soundexfirstname` | Text column on Persons | Stores pre-computed Soundex of First Name |
+| `cw_soundexlastname` | Text column on Persons | Stores pre-computed Soundex of Last Name |
+
+---
+
+## SECTION 2 — ACCESS VERIFICATION
+### Step-by-Step Checklist
+
+Complete every step. Screenshot or note the result of each check.
+
+---
+
+### CHECK 1 — Power Platform Admin Center Access
+
+```
+URL: https://admin.powerplatform.microsoft.com
+```
+
+1. Sign in with your Microsoft 365 account
+2. Left nav → **Environments**
+3. Locate your target environment (e.g., `IllinoisConnect - Dev`)
+4. Confirm your name appears under **Created by** or that you have access
+5. Click the environment name → **Settings**
+
+✅ **Pass:** You can open Settings without an "Access Denied" error
+❌ **Fail:** Request **Power Platform Administrator** role from your tenant admin
+
+---
+
+### CHECK 2 — Plugin Execution is Enabled
+
+```
+Path: Admin Center → Environments → [Your Env] → Settings → Product → Features
+```
+
+1. In Admin Center, open your environment → **Settings**
+2. Expand **Product** → click **Features**
+3. Scroll to section **"Plug-ins and custom workflow activities"**
+4. Confirm toggle = **ON**
+
+```
+┌─────────────────────────────────────────────────────┐
+│ Features                                            │
+│                                                     │
+│ Plug-ins and custom workflow activities             │
+│  Allow plug-ins and custom workflow activities  [✓] │
+└─────────────────────────────────────────────────────┘
+```
+
+✅ **Pass:** Toggle is ON
+❌ **Fail:** Toggle it ON (requires Power Platform Admin role)
+
+---
+
+### CHECK 3 — Dataverse Search is Enabled
+
+```
+Path: Admin Center → Environments → [Your Env] → Settings → Product → Features
+```
+
+Same Features page as Check 2:
+
+1. Scroll to **"Search"** section
+2. Confirm **"Dataverse Search"** = **ON**
+
+```
+┌─────────────────────────────────────────────────────┐
+│ Search                                              │
+│                                                     │
+│  Dataverse Search                               [✓] │
+│  Use Dataverse Search for search in model-driven    │
+│  apps and portals                                   │
+└─────────────────────────────────────────────────────┘
+```
+
+✅ **Pass:** Dataverse Search is ON
+❌ **Fail:** Enable it. Note: After enabling, the index takes **15–60 minutes** to build. Do not proceed to plugin development until indexing is complete.
+
+---
+
+### CHECK 4 — Verify Dataverse Search Index Includes Persons Table
+
+```
+Path: make.powerapps.com → [Your Env] → Settings (gear) → Advanced Settings →
+      Administration → System Settings → General tab
+```
+
+OR via the modern path:
+
+```
+make.powerapps.com → Solutions → Default Solution →
+Tables → Persons → Properties → Check "Appear in search results" = ON
+```
+
+1. Navigate to **make.powerapps.com** → switch to your environment
+2. Open **Solutions** → your solution → **Tables** → **Persons**
+3. Go to **Properties** or **Settings**
+4. Confirm **"Appears in search results"** = Enabled
+
+Then verify which columns are indexed:
+1. Open Persons table → **Columns**
+2. For each of the following columns, click it and confirm **"Searchable" = Yes**:
+   - `First Name` ✓
+   - `Last Name` ✓
+   - `Person ID` ✓
+   - `SSN` ✓
+   - `Sex` ✓
+   - `Race` ✓
+   - `cw_SoundexFirstName` ✓ *(add after column creation in Phase 0)*
+   - `cw_SoundexLastName` ✓ *(add after column creation in Phase 0)*
+
+✅ **Pass:** All columns are marked Searchable
+❌ **Fail:** Edit each column → set Searchable = Yes → Save → Publish
+
+---
+
+### CHECK 5 — Plugin Trace Log Enabled
+
+```
+Path: Admin Center → Environments → [Your Env] → Settings → Product → Features
+```
+
+Same Features page:
+
+1. Scroll to **"Diagnostics"** section
+2. Find **"Plug-in trace log"**
+3. Set to **"All"** (for development) or **"Exception"** (for production)
+
+```
+┌─────────────────────────────────────────────────────┐
+│ Diagnostics                                         │
+│                                                     │
+│  Enable logging to plug-in trace log:               │
+│  ○ Off   ○ Exception   ● All                        │
+└─────────────────────────────────────────────────────┘
+```
+
+✅ **Pass:** Set to "All" for development
+❌ **Fail:** Change it to "All" and save
+
+---
+
+### CHECK 6 — Security Role Verification (Your User Account)
+
+```
+Path: make.powerapps.com → [Your Env] → Settings (gear icon, top-right) →
+      Advanced Settings → Settings → Security → Users
+```
+
+1. Find your user in the list → click your name
+2. Click **"Manage Roles"**
+3. Confirm one of these is checked:
+   - ✅ **System Administrator** (preferred for dev)
+   - ✅ **System Customizer** (minimum for plugin registration + schema changes)
+
+✅ **Pass:** System Administrator or System Customizer is checked
+❌ **Fail:** Ask your tenant admin to assign System Customizer to your account
+
+---
+
+### CHECK 7 — Connect Plugin Registration Tool to Your Environment
+
+1. Open **XrmToolBox** → Connect → New Connection
+2. Enter your environment URL: `https://[orgname].crm.dynamics.com`
+3. Authenticate with your Microsoft account
+4. Open **Plugin Registration Tool** from XrmToolBox
+
+```
+In PRT:
+  Click "Create New Connection"
+  Server: https://[orgname].crm.dynamics.com
+  Auth Type: OAuth
+  Sign in with your account
+```
+
+5. Once connected, click **"Register"** → you should see the Register dropdown
+
+✅ **Pass:** PRT connects and you can see existing plugin assemblies (or an empty list if none registered yet)
+❌ **Fail:** Check that your user has System Customizer role (Check 6). Also verify the environment URL is correct.
+
+---
+
+### CHECK 8 — Verify Outbound HTTP is Permitted from Plugin Sandbox
+
+This verifies that your plugin can call the Dataverse Search API endpoint from within the plugin sandbox (needed for fuzzy search in Phase 2).
+
+**Method:** In Dataverse online (cloud), all plugins run in **Sandbox (partial trust)** mode. Sandbox plugins **CAN** make outbound HTTP calls, subject to the following:
+
+| Call Target | Permitted in Sandbox? |
 |---|---|
-| **Azure AI Search (external)** | Requires separate Azure subscription, index provisioning, and data sync pipeline. Dataverse Search already uses Azure Cognitive Search internally — duplicating the infrastructure is unnecessary cost and complexity for this scale. |
-| **Azure Function** | Adds infrastructure, deployment pipeline, and maintenance overhead. Power Automate covers the orchestration need without custom code. Use only if Soundex expression functions are insufficient in PA. |
-| **ForAll + client-side filter (current approach)** | Rejected by scale constraint. O(n) Dataverse calls with 100k+ records will time out and is architecturally unsafe. |
-| **Power Fx only** | Impossible — no fuzzy/phonetic primitives exist. |
-| **FetchXML in Power Automate** | FetchXML supports `like`, `begins-with`, `ends-with` — no fuzzy, no Soundex. Useful only for exact mode. |
+| Same-org Dataverse endpoint (`[org].crm.dynamics.com/api/data/...`) | ✅ Yes — same-org calls are always permitted |
+| External internet URLs | ⚠️ Requires allow-listing in some enterprise environments |
+| SharePoint, Azure services | ⚠️ Depends on environment network policy |
 
----
-
----
-
-# IMPLEMENTATION PLAN — ALPT-2635
-## AC1 · AC2 · AC3 · AC4
-### Step-by-Step | No Code Written Until Step 3 Is Approved
-
----
-
-## PRE-CONDITIONS (Gate — must be true before any build step begins)
-
-| # | Check | Owner |
-|---|---|---|
-| PC-1 | Dataverse Search (Relevance Search) is enabled in the target environment: **Settings → Features → Search → Dataverse Search = ON** | Admin |
-| PC-2 | Power Automate Premium license is confirmed (HTTP trigger requires Premium or Process plan) | Admin |
-| PC-3 | Dataverse Search index includes these columns: `First Name`, `Last Name`, `SSN`, `Person ID`, `Sex`, `Race` — verify in **Advanced Settings → Relevance Search → Configure** | Admin/Dev |
-| PC-4 | Developer has Maker access to the target Dataverse environment and the `advance-person-search` solution | Dev |
-| PC-5 | The two new Soundex columns (`cw_SoundexFirstName`, `cw_SoundexLastName`) are approved to be added to the Persons table | Arch/BA |
-
----
-
-## PHASE 0 — Dataverse Schema Extension
-*Purpose: Lay the data foundation for phonetic matching (AC4) before any flow is built.*
-
-**Step 0.1 — Add `cw_SoundexFirstName` column to Persons table**
-- Type: Text (single line)
-- Max length: 10 characters
-- Required: No
-- Searchable: Yes
-- Schema name: `cw_soundexfirstname`
-
-**Step 0.2 — Add `cw_SoundexLastName` column to Persons table**
-- Type: Text (single line)
-- Max length: 10 characters
-- Required: No
-- Searchable: Yes
-- Schema name: `cw_soundexlastname`
-
-**Step 0.3 — Publish customisations and verify columns appear in the Persons form**
-
-**Step 0.4 — Document schema change in the solution manifest** (column names, purpose, owning story)
-
-**Gate:** Both columns visible in Dataverse table editor. Schema names confirmed. ✓
-
----
-
-## PHASE 1 — Soundex Maintenance Flow
-*Purpose: Keep `cw_SoundexFirstName` and `cw_SoundexLastName` current on every write — so AC4 phonetic queries hit pre-indexed data, not real-time computation.*
-
-**Step 1.1 — Create Power Automate cloud flow: `ALPT-2635 | Persons Soundex Maintenance`**
-- Trigger: `When a row is added, modified or deleted` (Dataverse)
-- Table: Persons
-- Change type: Added **and** Modified (both)
-- Run mode: Automated cloud flow
-
-**Step 1.2 — Define Soundex computation action**
-- Input: `First Name` and `Last Name` from the trigger row
-- Method: Compose action using a Power Automate expression that implements the Soundex algorithm
-  - *(Exact expression to be confirmed in the code step — this step locks the interface, not the implementation)*
-- Output variables: `varSoundexFirstName`, `varSoundexLastName`
-
-**Step 1.3 — Write computed values back to the triggering row**
-- Action: `Update a row` (Dataverse) on the Persons table
-- Row ID: PersonID from trigger
-- Set `cw_SoundexFirstName` = `varSoundexFirstName`
-- Set `cw_SoundexLastName` = `varSoundexLastName`
-- Guard: Only update if computed values differ from current stored values (prevent infinite trigger loop)
-
-**Step 1.4 — Run one-time backfill**
-- Create a separate single-run flow that retrieves all existing Persons rows and runs the same Soundex computation + update for each
-- Execute against the current ~2,000 records
-- Verify: spot-check 10 records — confirm `cw_SoundexFirstName` = expected Soundex code for the stored first name
-
-**Gate:** All ~2,000 existing records have non-null Soundex columns. New/updated records trigger the flow and auto-populate within seconds. ✓
-
----
-
-## PHASE 2 — Advanced Person Search Service Flow
-*Purpose: The server-side search engine that replaces all Power Fx direct Dataverse queries. This single flow handles all three search modes: exact, fuzzy, and phonetic.*
-
-**Step 2.1 — Create Power Automate cloud flow: `ALPT-2635 | Advanced Person Search Service`**
-- Trigger: `Manually trigger a flow` (instant/HTTP) — allows Power Apps to call it synchronously and receive a response
-- Define input schema for the trigger: all 14 search field values (nullable strings) + `isExactMatch` (boolean)
-
-| Input Parameter | Type | Maps To |
-|---|---|---|
-| `firstName` | String (nullable) | txtFirstName.Value |
-| `lastName` | String (nullable) | txtLastName.Value |
-| `dob` | String (nullable) | txtDOB.Value |
-| `personId` | String (nullable) | TextBox5.Value |
-| `ssn` | String (nullable) | txtSSN.Value |
-| `phoneNumber` | String (nullable) | txtPhoneNUmber.Value |
-| `addressLine1` | String (nullable) | txtAddress1.Value |
-| `addressLine2` | String (nullable) | txtAddress2.Value |
-| `city` | String (nullable) | TextBox10.Value |
-| `state` | String (nullable) | TextBox11.Value |
-| `zipCode` | String (nullable) | TextBox12.Value |
-| `county` | String (nullable) | txtCounty.Value |
-| `gender` | String (nullable) | cmbGender selected value |
-| `race` | String array (nullable) | cmbRace selected values |
-| `isExactMatch` | Boolean | tglExactMatch.Value |
-
-**Step 2.2 — Build Branch A: Exact Mode (`isExactMatch = true`)**
-- Condition: `isExactMatch equals true`
-- Action: Dataverse `List Rows` with OData `$filter` on all non-blank fields (exact equality / StartsWith for names)
-- Filter logic: each field only included in the filter if its input value is non-blank
-- Return: full Person rows
-
-**Step 2.3 — Build Branch B1: Fuzzy Text Matching (`isExactMatch = false` — AC2/AC3)**
-- Action: HTTP action → `POST [org]/api/data/v9.2/search`
-- Headers: `Authorization: Bearer [Dataverse token]`, `Content-Type: application/json`
-- Body: Construct Lucene search query using entered fields with `~1` fuzzy operators
-  - Non-blank `firstName` → `firstname:Jhon~1`
-  - Non-blank `lastName` → `lastname:Smyth~1`
-  - Combine all entered fields with `AND` operator for multi-field AC3 behaviour
-- Parse response: extract array of `entityid` (PersonID) values with relevance scores
-
-**Step 2.4 — Build Branch B2: Phonetic Matching (`isExactMatch = false` — AC4)**
-- Action: Compute `SOUNDEX(firstName)` and `SOUNDEX(lastName)` using Power Automate expression
-- Action: Dataverse `List Rows` with exact OData filter:
-  - `cw_soundexfirstname eq '[computedSoundex]'` (if firstName was entered)
-  - `cw_soundexlastname eq '[computedSoundex]'` (if lastName was entered)
-- Return: array of Person rows matching phonetically
-
-**Step 2.5 — Merge and Deduplicate results from B1 and B2**
-- Union of PersonIDs from both branches
-- Deduplicate using a `Select` + `Union` pattern on PersonID
-- Hydrate full Person records for the merged PersonID set (single Dataverse `List Rows` with `personid in [...]` filter)
-
-**Step 2.6 — Hydrate related Address records**
-- For the merged Person set: single `List Rows` on `Person Addresses` table with `statecode = 0` and `PersonID in [merged set]`
-- Build `FullAddress` string server-side in the flow (not in Power Fx)
-
-**Step 2.7 — Compose response JSON array**
-Each element:
-```
-{ PersonID, DisplayName, DOB, SexLabel, SSN, FullAddress }
-```
-
-**Step 2.8 — Define `Respond to a PowerApp or flow` action**
-- Return the composed JSON array as the flow response
-- Include error state field: `{ success: bool, errorMessage: string, results: [...] }`
-
-**Step 2.9 — Test the flow in isolation (before wiring to Power Apps)**
-- Use the built-in Power Automate test runner with manually entered inputs
-- Test case matrix:
-  - Exact mode with valid first name → correct exact results
-  - Fuzzy mode with typo in first name → fuzzy results returned
-  - Multi-field fuzzy → intersection results
-  - Phonetically similar name (e.g., "Jhon" vs "John") → phonetic match returned
-  - All fields blank (should not be reachable from validated app, but test defensively)
-  - No matching records → empty array, `success = true`
-  - Dataverse unavailable → `success = false`, `errorMessage` populated
-
-**Gate:** Flow passes all 7 test cases when triggered manually. Response time acceptable (<5 seconds for 2,000 records). ✓
-
----
-
-## PHASE 3 — Canvas App Changes (Screen1)
-*Purpose: Wire the existing Search screen to the new flow and implement AC1 (toggle + default fuzzy mode).*
-
-**Step 3.1 — Confirm `tglExactMatch` toggle is present on Screen1**
-- Control name: `tglExactMatch` (locked — confirmed)
-- Default value: `false` (unchecked = fuzzy/phonetic mode by default per AC1)
-- Label: `"Exact Matches Only"`
-- Verify the control exists; if not yet added, place it in the form area near `btnSearch`
-
-**Step 3.2 — Remove all direct Dataverse `Filter()` calls from `btnSearch.OnSelect`**
-- Delete: primary `ClearCollect(colAPS_Results, Filter(Persons, ...))` block
-- Delete: DOB local re-filter block
-- Delete: Race local re-filter block
-- Delete: Phone `ForAll` loop and `colPhoneNums` population block
-- Delete: Address `ForAll` loop and `colAddressNums` population block
-- Delete: `colAPS_Results_Flat` ForAll build block
-- Delete: all intermediate variable assignments that fed those blocks (`var_fn`, `var_ln`, etc. — replace with direct flow input)
-- Keep: all input validation logic (presence check, format checks, DOB parsing) — these run client-side before any server call
-
-**Step 3.3 — Add Power Automate flow call to `btnSearch.OnSelect`**
-- After validation passes (`varCanSearch = true`), call `ALPT-2635 | Advanced Person Search Service`
-- Pass all 14 field values + `tglExactMatch.Value` as `isExactMatch`
-- Set `varIsSearching = true` before call, `varIsSearching = false` after
-- Wrap in `IfError()`: on failure, set `varAPS_Error = "Search unavailable. Please try again."`, set `varIsSearching = false`
-
-**Step 3.4 — Populate `colAPS_Results_Flat` from flow response**
-- `ClearCollect(colAPS_Results_Flat, flowResponse.results)`
-- Remove all references to the now-deleted intermediate collections (`colAPS_Results`, `colPhoneNums`, `colAddressNums`)
-
-**Step 3.5 — Fix address input case bug (audit blocker B6)**
-- All address input variables passed to the flow must be lowercased before passing
-- This is resolved server-side in the flow — document the expectation that the flow normalises all string inputs to lower-case for comparison
-
-**Step 3.6 — Verify empty-state handling**
-- If `flowResponse.results` is empty array: ensure Screen1 shows `"No Matching Person Records Were Found in the System"` label
-- Label `Visible` condition: `varSearchClicked && !varIsSearching && CountRows(colAPS_Results_Flat) = 0 && IsBlank(varAPS_Error)`
-
-**Step 3.7 — Remove Results Gallery dependency (confirmed architecture decision)**
-- The temporary placeholder Results Gallery on Screen1 is out of scope — leave as-is but do not wire any new logic to it
-
-**Gate:** Screen1 compiles with no Power Fx formula errors. All delegation warnings resolved (no direct Dataverse Filter() calls remain). ✓
-
----
-
-## PHASE 4 — Acceptance Criteria Verification
-
-**Step 4.1 — AC1 Verification**
-- Screen loads → all 14 fields visible ✓
-- `tglExactMatch` present, default = OFF (fuzzy mode) ✓
-- `tglExactMatch` label reads "Exact Matches Only" ✓
-
-**Step 4.2 — AC2 Verification (Single-field fuzzy)**
-- Enter `"Jhon"` in First Name only → results include persons named "John" ✓
-- Enter `"Smyth"` in Last Name only → results include persons named "Smith" ✓
-- Enter `"Chcago"` in City (address) → results include persons in "Chicago" ✓
-
-**Step 4.3 — AC3 Verification (Multi-field fuzzy)**
-- Enter `"Jhon"` + `"Smyth"` → results include persons matching both fuzzily ✓
-- Enter First Name + DOB partial → results are intersection of both fuzzy matches ✓
-
-**Step 4.4 — AC4 Verification (Phonetic/Soundex)**
-- Enter `"Fissher"` in Last Name → results include persons named "Fisher" (same Soundex: F260) ✓
-- Enter `"Smythe"` in Last Name → results include "Smith" (same Soundex: S530) ✓
-- Enter `"Jon"` in First Name → results include "John" (same Soundex: J500) ✓
-
-**Step 4.5 — Exact Mode Verification**
-- Toggle `tglExactMatch = ON`, enter `"Jhon"` → results do NOT include "John" ✓
-- Toggle `tglExactMatch = ON`, enter `"John"` → results include only exact "John" matches ✓
-
-**Step 4.6 — Performance Verification**
-- Run search against ~2,000 record dataset → response time < 5 seconds ✓
-- Document baseline response time for future regression comparison
-
-**Gate:** All 6 verification groups pass. AC1–AC4 formally closed. ✓
-
----
-
-## BUILD ORDER SUMMARY
+**How to verify:**
 
 ```
-PC-1 through PC-5 (Pre-conditions verified)
-    ↓
-Phase 0: Dataverse schema — add 2 Soundex columns
-    ↓
-Phase 1: Soundex Maintenance Flow — pre-compute + backfill
-    ↓
-Phase 2: Search Service Flow — fuzzy (B1) + phonetic (B2) + merge
-    ↓
-        Flow tested in isolation — GATE
-    ↓
-Phase 3: Canvas App wiring — remove ForAll blocks, add flow call, fix toggle
-    ↓
-        App compiles, no delegation warnings — GATE
-    ↓
-Phase 4: AC1–AC4 end-to-end verification
-    ↓
-        All ACs pass — STORY CLOSED
+Path: Admin Center → Environments → [Your Env] → Settings →
+      Network Access → Allowed Domains
+```
+
+Check if there is a **restrictive allowed-domains policy**. If the field is empty or set to allow-all, outbound calls work. If there is a whitelist, ensure `[yourorg].crm.dynamics.com` is included (it usually is by default for same-org calls).
+
+✅ **Pass:** No restrictive domain policy, or your org URL is in the list
+❌ **Fail:** Add `[yourorg].crm.dynamics.com` to the allowed domains, or contact your network/security team
+
+---
+
+### CHECK 9 — Verify Solution Exists for Customization Packaging
+
+```
+Path: make.powerapps.com → Solutions
+```
+
+1. Navigate to Solutions
+2. Confirm the target solution exists (e.g., `AdvancePersonSearch` or `ALPT2635`)
+3. Open it and confirm you can click **"New"** to add components
+
+✅ **Pass:** Solution exists and is editable (Unmanaged)
+❌ **Fail:** Create a new unmanaged solution: `+ New Solution` → Name: `ALPT2635` → Publisher: your org publisher → Create
+
+---
+
+### CHECK 10 — pac CLI Authentication Test
+
+Open a terminal (PowerShell or CMD):
+
+```powershell
+# Authenticate pac CLI to your environment
+pac auth create --environment https://[orgname].crm.dynamics.com
+
+# List auth profiles - should show your environment
+pac auth list
+
+# Test connection
+pac solution list
+```
+
+✅ **Pass:** `pac solution list` returns your solutions without error
+❌ **Fail:** Re-run `pac auth create` and re-authenticate. Verify the environment URL.
+
+---
+
+### PREREQUISITE SUMMARY CHECKLIST
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  FULL PLUGIN APPROACH — PRE-BUILD GATE                               │
+├────┬─────────────────────────────────────────────────────┬───────────┤
+│ #  │ Check                                               │ Status    │
+├────┼─────────────────────────────────────────────────────┼───────────┤
+│ 1  │ Power Platform Admin Center accessible              │ [ ] Done  │
+│ 2  │ Plugin execution enabled in environment             │ [ ] Done  │
+│ 3  │ Dataverse Search enabled + index built              │ [ ] Done  │
+│ 4  │ Persons table + columns marked Searchable           │ [ ] Done  │
+│ 5  │ Plugin Trace Log set to "All"                       │ [ ] Done  │
+│ 6  │ User has System Administrator/Customizer role       │ [ ] Done  │
+│ 7  │ Plugin Registration Tool connects successfully      │ [ ] Done  │
+│ 8  │ Outbound HTTP permitted from plugin sandbox         │ [ ] Done  │
+│ 9  │ Unmanaged solution exists and is editable           │ [ ] Done  │
+│ 10 │ pac CLI authenticates to environment                │ [ ] Done  │
+└────┴─────────────────────────────────────────────────────┴───────────┘
+All 10 = GREEN before any code is written
 ```
 
 ---
 
+## SECTION 3 — FULL PLUGIN ARCHITECTURE DIAGRAM
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║                    ALPT-2635 · FULL PLUGIN ARCHITECTURE                        ║
+║                    IllinoisConnect — Advanced Person Search                     ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           POWER APPS (Canvas)                               │
+│                                                                             │
+│  ┌─────────────────── Screen1 ───────────────────────────────────────────┐  │
+│  │  [txtFirstName] [txtLastName] [txtDOB]   [TextBox5=PersonID]          │  │
+│  │  [txtSSN]  [cmbGender]  [cmbRace]        [txtPhoneNUmber]             │  │
+│  │  [txtAddress1] [txtAddress2]             [TextBox10=City]             │  │
+│  │  [TextBox11=State] [TextBox12=Zip]       [txtCounty]                  │  │
+│  │                                                                       │  │
+│  │  tglExactMatch ◄── Default: OFF (fuzzy+phonetic mode)                 │  │
+│  │                                                                       │  │
+│  │  [btnSearch] ──────────────────────────────────────────────────────┐  │  │
+│  │                Client-side validation runs first:                  │  │  │
+│  │                • Presence check (≥1 field)                         │  │  │
+│  │                • Format validation (name/SSN/DOB/phone/personID)   │  │  │
+│  │                • Only on PASS → call Dataverse Custom API below    │  │  │
+│  └─────────────────────────────────────────────────────────────────── │ ─┘  │
+│                                                                        │     │
+│  Power Fx call (standard Dataverse connector — NO Power Automate):    │     │
+│  Environment.ExecuteUnboundAction(                                    │     │
+│      "cw_AdvancedPersonSearch",                                       │     │
+│      { firstName, lastName, dob, personId, ssn,                      │     │
+│        phone, addr1, addr2, city, state, zip,                         │     │
+│        county, gender, race[], isExactMatch }                         │     │
+│  )                                                                    │     │
+└──────────────────────────────────────────────────────────────────────────│──┘
+                                                                           │
+                      Dataverse Connector (Standard)                       │
+                      No Premium license needed                            │
+                                                                           ▼
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    DATAVERSE PLATFORM                                        ║
+║                                                                              ║
+║  ┌─────────────────────────────────────────────────────────────────────┐     ║
+║  │              CUSTOM API: cw_AdvancedPersonSearch                    │     ║
+║  │                                                                     │     ║
+║  │  Input Parameters:                    Output Parameters:            │     ║
+║  │  • firstName       (String)           • resultsJson  (String/JSON)  │     ║
+║  │  • lastName        (String)           • success      (Boolean)      │     ║
+║  │  • dob             (String)           • errorMessage (String)       │     ║
+║  │  • personId        (String)           • totalCount   (Integer)      │     ║
+║  │  • ssn             (String)                                         │     ║
+║  │  • phoneNumber     (String)                                         │     ║
+║  │  • addressLine1    (String)                                         │     ║
+║  │  • addressLine2    (String)                                         │     ║
+║  │  • city            (String)                                         │     ║
+║  │  • state           (String)                                         │     ║
+║  │  • zipCode         (String)                                         │     ║
+║  │  • county          (String)                                         │     ║
+║  │  • gender          (String)                                         │     ║
+║  │  • raceValues      (String/CSV)                                     │     ║
+║  │  • isExactMatch    (Boolean)                                        │     ║
+║  └──────────────────────────┬──────────────────────────────────────────┘     ║
+║                             │ Triggers plugin on execution                   ║
+║                             ▼                                                ║
+║  ┌──────────────────────────────────────────────────────────────────────┐    ║
+║  │         PLUGIN ASSEMBLY: ALPT2635.Plugins.dll                        │    ║
+║  │         Runtime: .NET Framework 4.6.2 | Sandbox (Partial Trust)      │    ║
+║  │                                                                      │    ║
+║  │  ╔══════════════════════════════════════════════════════════════╗    │    ║
+║  │  ║  CLASS: AdvancedPersonSearchPlugin                           ║    │    ║
+║  │  ║  Registered on: cw_AdvancedPersonSearch (Custom API)        ║    │    ║
+║  │  ║  Stage: 30 (Pre-operation) | Mode: Synchronous              ║    │    ║
+║  │  ║                                                              ║    │    ║
+║  │  ║  Execute() method flow:                                      ║    │    ║
+║  │  ║                                                              ║    │    ║
+║  │  ║  Step 1: Read all input parameters from                      ║    │    ║
+║  │  ║          IPluginExecutionContext.InputParameters             ║    │    ║
+║  │  ║                                                              ║    │    ║
+║  │  ║  Step 2: Normalise inputs                                    ║    │    ║
+║  │  ║          • Trim whitespace                                   ║    │    ║
+║  │  ║          • ToLower() all text fields                         ║    │    ║
+║  │  ║          • Strip non-digit chars from phone/SSN/zip          ║    │    ║
+║  │  ║                                                              ║    │    ║
+║  │  ║  Step 3: BRANCH on isExactMatch                              ║    │    ║
+║  │  ║                                                              ║    │    ║
+║  │  ║  ┌─── PATH A: Exact Mode (isExactMatch = true) ───────────┐ ║    │    ║
+║  │  ║  │                                                        │ ║    │    ║
+║  │  ║  │  Build QueryExpression on Persons table                │ ║    │    ║
+║  │  ║  │  FilterExpression: AND of all non-blank fields         │ ║    │    ║
+║  │  ║  │  • FirstName    → Equals                               │ ║    │    ║
+║  │  ║  │  • LastName     → Equals                               │ ║    │    ║
+║  │  ║  │  • PersonID     → Equals                               │ ║    │    ║
+║  │  ║  │  • SSN          → Equals OR EndsWith (last 4)          │ ║    │    ║
+║  │  ║  │  • Sex          → Equals (option set int value)        │ ║    │    ║
+║  │  ║  │  • Race         → In (multi-value option set)          │ ║    │    ║
+║  │  ║  │  • DOB          → Equals / Between (year/month/day)    │ ║    │    ║
+║  │  ║  │                                                        │ ║    │    ║
+║  │  ║  │  Related entity joins (LinkEntity):                    │ ║    │    ║
+║  │  ║  │  • Phone Numbers → phone digit match                   │ ║    │    ║
+║  │  ║  │  • Person Addresses → addr/city/state/zip/county match  │ ║    │    ║
+║  │  ║  │                                                        │ ║    │    ║
+║  │  ║  │  IOrganizationService.RetrieveMultiple(query)         │ ║    │    ║
+║  │  ║  │  → EntityCollection (exact matched Persons)            │ ║    │    ║
+║  │  ║  └────────────────────────────────────────────────────────┘ ║    │    ║
+║  │  ║                                                              ║    │    ║
+║  │  ║  ┌─── PATH B: Fuzzy+Phonetic Mode (isExactMatch = false) ─┐ ║    │    ║
+║  │  ║  │                                                        │ ║    │    ║
+║  │  ║  │  ┌── BRANCH B1: Fuzzy Text (AC2 / AC3) ─────────────┐ │ ║    │    ║
+║  │  ║  │  │                                                   │ │ ║    │    ║
+║  │  ║  │  │  Build Lucene query string:                       │ │ ║    │    ║
+║  │  ║  │  │  "firstname:Jhon~1 AND lastname:Smyth~1"          │ │ ║    │    ║
+║  │  ║  │  │   ↑ ~1 = 1 edit distance (Damerau-Levenshtein)    │ │ ║    │    ║
+║  │  ║  │  │                                                   │ │ ║    │    ║
+║  │  ║  │  │  HttpClient.PostAsync(                            │ │ ║    │    ║
+║  │  ║  │  │    "[org]/api/data/v9.2/search",                  │ │ ║    │    ║
+║  │  ║  │  │    { search: "Jhon~1",                            │ │ ║    │    ║
+║  │  ║  │  │      searchMode: "any",                           │ │ ║    │    ║
+║  │  ║  │  │      entities: ["cw_person"],                     │ │ ║    │    ║
+║  │  ║  │  │      querytype: "full" }                          │ │ ║    │    ║
+║  │  ║  │  │  )                                                │ │ ║    │    ║
+║  │  ║  │  │                                                   │ │ ║    │    ║
+║  │  ║  │  │  → Returns: List<Guid> (fuzzy matched PersonIDs)  │ │ ║    │    ║
+║  │  ║  │  └───────────────────────────────────────────────────┘ │ ║    │    ║
+║  │  ║  │                                                        │ ║    │    ║
+║  │  ║  │  ┌── BRANCH B2: Phonetic (AC4 — Names only) ────────┐ │ ║    │    ║
+║  │  ║  │  │                                                   │ │ ║    │    ║
+║  │  ║  │  │  SoundexHelper.Compute(firstName) → e.g. "J500"  │ │ ║    │    ║
+║  │  ║  │  │  SoundexHelper.Compute(lastName)  → e.g. "S530"  │ │ ║    │    ║
+║  │  ║  │  │                                                   │ │ ║    │    ║
+║  │  ║  │  │  QueryExpression on Persons:                      │ │ ║    │    ║
+║  │  ║  │  │  WHERE cw_soundexfirstname = "J500"               │ │ ║    │    ║
+║  │  ║  │  │  AND   cw_soundexlastname  = "S530"               │ │ ║    │    ║
+║  │  ║  │  │  (only conditions added for non-blank inputs)     │ │ ║    │    ║
+║  │  ║  │  │                                                   │ │ ║    │    ║
+║  │  ║  │  │  IOrganizationService.RetrieveMultiple(query)    │ │ ║    │    ║
+║  │  ║  │  │  → Returns: List<Guid> (phonetic matched IDs)     │ │ ║    │    ║
+║  │  ║  │  └───────────────────────────────────────────────────┘ │ ║    │    ║
+║  │  ║  │                                                        │ ║    │    ║
+║  │  ║  │  ┌── MERGE: Union B1 + B2 ────────────────────────┐   │ ║    │    ║
+║  │  ║  │  │  mergedIds = B1_PersonIDs.Union(B2_PersonIDs)   │   │ ║    │    ║
+║  │  ║  │  │  Deduplicated by PersonID (GUID)                │   │ ║    │    ║
+║  │  ║  │  └────────────────────────────────────────────────┘   │ ║    │    ║
+║  │  ║  └────────────────────────────────────────────────────────┘ ║    │    ║
+║  │  ║                                                              ║    │    ║
+║  │  ║  Step 4: HYDRATE full Person records                         ║    │    ║
+║  │  ║          QueryExpression: PersonID IN [mergedIds]            ║    │    ║
+║  │  ║          Columns: FirstName, LastName, DOB, SSN,             ║    │    ║
+║  │  ║                   Sex, Race, PersonID                        ║    │    ║
+║  │  ║                                                              ║    │    ║
+║  │  ║  Step 5: HYDRATE related Address records                     ║    │    ║
+║  │  ║          LinkEntity: PersonAddresses WHERE statecode=0       ║    │    ║
+║  │  ║          AND PersonID IN [mergedIds]                         ║    │    ║
+║  │  ║          Columns: addr1, addr2, city, state, zip, county     ║    │    ║
+║  │  ║                                                              ║    │    ║
+║  │  ║  Step 6: BUILD flat result list (server-side)                ║    │    ║
+║  │  ║          For each Person → for each Address:                 ║    │    ║
+║  │  ║          { PersonID, DisplayName, DOB, SexLabel,             ║    │    ║
+║  │  ║            SSN, FullAddress }                                ║    │    ║
+║  │  ║                                                              ║    │    ║
+║  │  ║  Step 7: SERIALISE to JSON → set OutputParameters           ║    │    ║
+║  │  ║          ["resultsJson"] = JsonConvert.Serialize(results)    ║    │    ║
+║  │  ║          ["success"] = true                                  ║    │    ║
+║  │  ║          ["totalCount"] = results.Count                      ║    │    ║
+║  │  ╚══════════════════════════════════════════════════════════════╝    │    ║
+║  │                                                                      │    ║
+║  │  ╔══════════════════════════════════════════════════════════════╗    │    ║
+║  │  ║  CLASS: PersonSoundexPlugin                                  ║    │    ║
+║  │  ║  Registered on: Create + Update message (Persons table)     ║    │    ║
+║  │  ║  Stage: 40 (Post-operation) | Mode: Asynchronous            ║    │    ║
+║  │  ║                                                              ║    │    ║
+║  │  ║  Execute() method flow:                                      ║    │    ║
+║  │  ║                                                              ║    │    ║
+║  │  ║  1. Read FirstName, LastName from Target entity              ║    │    ║
+║  │  ║                                                              ║    │    ║
+║  │  ║  2. Compute using SoundexHelper (internal static class):     ║    │    ║
+║  │  ║     "John"   → "J500"                                        ║    │    ║
+║  │  ║     "Smith"  → "S530"                                        ║    │    ║
+║  │  ║     "O'Brien"→ "O165"                                        ║    │    ║
+║  │  ║                                                              ║    │    ║
+║  │  ║  3. Guard: skip update if Soundex values unchanged           ║    │    ║
+║  │  ║     (prevents infinite update loop)                         ║    │    ║
+║  │  ║                                                              ║    │    ║
+║  │  ║  4. IOrganizationService.Update(Person):                     ║    │    ║
+║  │  ║     cw_soundexfirstname = computedFirst                      ║    │    ║
+║  │  ║     cw_soundexlastname  = computedLast                       ║    │    ║
+║  │  ╚══════════════════════════════════════════════════════════════╝    │    ║
+║  │                                                                      │    ║
+║  │  ╔═════════════════════════════════════════╗                         │    ║
+║  │  ║  STATIC CLASS: SoundexHelper            ║                         │    ║
+║  │  ║  (US Russell Soundex — D4 confirmed)    ║                         │    ║
+║  │  ║                                         ║                         │    ║
+║  │  ║  Compute(string input) → string         ║                         │    ║
+║  │  ║  • Strip non-alpha, uppercase           ║                         │    ║
+║  │  ║  • Keep first letter                    ║                         │    ║
+║  │  ║  • Map remaining: BFPV→1, CGJKQSXZ→2,  ║                         │    ║
+║  │  ║    DT→3, L→4, MN→5, R→6                ║                         │    ║
+║  │  ║  • Remove consecutive duplicates        ║                         │    ║
+║  │  ║  • Remove H/W/vowels                    ║                         │    ║
+║  │  ║  • Pad/truncate to 4 chars              ║                         │    ║
+║  │  ║  • Returns: [Letter][3 digits]          ║                         │    ║
+║  │  ╚═════════════════════════════════════════╝                         │    ║
+║  └──────────────────────────────────────────────────────────────────────┘    ║
+║                                                                              ║
+║  ┌─────────────────────────── DATAVERSE DATA LAYER ─────────────────────┐   ║
+║  │                                                                       │   ║
+║  │  ┌─────────────────────────────────────────────────────────────────┐ │   ║
+║  │  │  TABLE: Persons                                                 │ │   ║
+║  │  │  ─────────────────────────────────────────────────────────────  │ │   ║
+║  │  │  PersonID (Autonumber — PK)    FirstName      LastName          │ │   ║
+║  │  │  DateOfBirth                  SSN             Sex (option set)  │ │   ║
+║  │  │  Race (multi-select opt set)                                    │ │   ║
+║  │  │  ── NEW COLUMNS (Phase 0) ──────────────────────────────────── │ │   ║
+║  │  │  cw_SoundexFirstName (Text)   ← populated by PersonSoundexPlugin│ │   ║
+║  │  │  cw_SoundexLastName  (Text)   ← populated by PersonSoundexPlugin│ │   ║
+║  │  └─────────────────────────────────────────────────────────────────┘ │   ║
+║  │                                                                       │   ║
+║  │  ┌─────────────────────────────────────────────────────────────────┐ │   ║
+║  │  │  TABLE: Phone Numbers                                           │ │   ║
+║  │  │  ─────────────────────────────────────────────────────────────  │ │   ║
+║  │  │  cw_Person (lookup → Persons)    cw_phonenumber (Text)         │ │   ║
+║  │  └─────────────────────────────────────────────────────────────────┘ │   ║
+║  │                                                                       │   ║
+║  │  ┌─────────────────────────────────────────────────────────────────┐ │   ║
+║  │  │  TABLE: Person Addresses                                        │ │   ║
+║  │  │  ─────────────────────────────────────────────────────────────  │ │   ║
+║  │  │  Person_PersonAddress (lookup)   cw_addressline1  cw_addressline2│ │   ║
+║  │  │  cw_city   cw_state   cw_zipcode   cw_county   statecode (int)  │ │   ║
+║  │  └─────────────────────────────────────────────────────────────────┘ │   ║
+║  │                                                                       │   ║
+║  │  ┌─────────────────────────────────────────────────────────────────┐ │   ║
+║  │  │  DATAVERSE SEARCH INDEX                                         │ │   ║
+║  │  │  (Azure Cognitive Search — Microsoft managed)                   │ │   ║
+║  │  │  ─────────────────────────────────────────────────────────────  │ │   ║
+║  │  │  Indexed fields: FirstName, LastName, PersonID, SSN,            │ │   ║
+║  │  │  Sex, Race, cw_SoundexFirstName, cw_SoundexLastName             │ │   ║
+║  │  │  Query endpoint: [org]/api/data/v9.2/search                     │ │   ║
+║  │  │  Supports: Lucene full syntax with ~N fuzzy operators            │ │   ║
+║  │  └─────────────────────────────────────────────────────────────────┘ │   ║
+║  └───────────────────────────────────────────────────────────────────────┘   ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+                                │
+                    JSON Response returned
+                    to Power Apps Dataverse connector
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  POWER APPS — btnSearch.OnSelect (after plugin response received)            │
+│                                                                             │
+│  ClearCollect(colAPS_Results_Flat, ParseJSON(response.resultsJson))         │
+│  Set(varIsSearching, false)                                                 │
+│  Navigate(PersonResultsScreen)                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+                     WRITE PATH (separate — always active)
+═══════════════════════════════════════════════════════════════════════════════
+
+  Any system creates or updates a Person record
+          │
+          ▼
+  Dataverse executes Create/Update on Persons table
+          │
+          │  Post-operation fires automatically
+          ▼
+  PersonSoundexPlugin.Execute()
+  ├── Compute Soundex(FirstName) → cw_soundexfirstname
+  └── Compute Soundex(LastName)  → cw_soundexlastname
+          │
+          ▼
+  IOrganizationService.Update() writes Soundex values back
+  (guard prevents infinite loop — only updates if values changed)
+
+═══════════════════════════════════════════════════════════════════════════════
+                     BACKFILL PATH (one-time, run once)
+═══════════════════════════════════════════════════════════════════════════════
+
+  Small Power Automate flow OR console app:
+  1. List all existing Persons rows (paginated, 5000/page)
+  2. For each: call cw_AdvancedPersonSearch with exact mode
+     OR directly call a backfill Custom API
+  3. PersonSoundexPlugin auto-fires on each Update
+  4. Result: all ~2,000 existing records get Soundex populated
+
+  Run once. Decommission after verification.
+```
+
 ---
 
-## WHAT REQUIRES YOUR DECISION BEFORE PROCEEDING TO CODE
+## SECTION 4 — SOLUTION PACKAGE STRUCTURE
 
-The plan above is complete and sequenced. Before writing a single formula or flow action, the following must be confirmed or answered:
+Everything lives in one Dataverse solution for clean deployment across environments:
 
-| # | Decision Required | Options |
-|---|---|---|
-| D1 | Confirm PC-1–PC-5 pre-conditions are met in your environment | Admin verification |
-| D2 | Confirm Soundex column additions (Phase 0) are approved for the Persons table | Schema owner approval |
-| D3 | Confirm Power Automate Premium license is available for the HTTP trigger pattern | License check |
-| D4 | Confirm the Soundex algorithm for Phase 1 — standard US Soundex (Russell) is assumed; confirm if NYSIIS or Double Metaphone is preferred for demographic accuracy | BA/DBA |
-| D5 | Confirm that address, phone, SSN, PersonID, Race, and Gender fields should also participate in fuzzy matching or only name fields — the AC text implies "any of the available fields" but Soundex on a phone number or ZIP code is semantically meaningless | BA confirmation |
-| D6 | Confirm the merge strategy — if both Branch B1 (fuzzy) and Branch B2 (phonetic) return results, should the merged set be a **union** (all from either branch) or an **intersection** (only records appearing in both)? | BA confirmation |
+```
+Solution: ALPT2635
+│
+├── Plugin Assembly
+│   └── ALPT2635.Plugins.dll
+│       ├── PersonSoundexPlugin        (Create + Update, Post-op, Async)
+│       ├── AdvancedPersonSearchPlugin (Custom API, Pre-op, Sync)
+│       └── SoundexHelper              (internal static utility class)
+│
+├── Custom APIs
+│   └── cw_AdvancedPersonSearch
+│       ├── Input Parameters (15)
+│       └── Output Parameters (4)
+│
+├── Table Customizations
+│   └── Persons (cw_person)
+│       ├── cw_soundexfirstname  (new Text column)
+│       └── cw_soundexlastname   (new Text column)
+│
+└── Canvas App (existing)
+    └── advance-person-search
+        ├── Screen1 (updated btnSearch, tglExactMatch wiring)
+        └── PersonResultsScreen (unchanged for this story)
+```
 
-**When you confirm these 6 decisions and say "proceed," code and formula writing begins at Phase 0, Step 0.1.**
+---
+
+---
+
+## YOUR NEXT STEP
+
+**Run all 10 access checks** in your environment and confirm which pass and which fail. Once all 10 are green:
+
+1. Say **"all checks passed — proceed"** → code begins at **Phase 0** (Dataverse columns)
+2. If any check fails → share which one and I will walk you through the exact fix
+
+The build order once confirmed:
+
+```
+Phase 0  → Add cw_SoundexFirstName + cw_SoundexLastName columns
+Phase 1  → Build ALPT2635.Plugins C# project + SoundexHelper class
+Phase 2  → PersonSoundexPlugin (write-path — post-op)
+Phase 3  → Custom API cw_AdvancedPersonSearch (definition in Dataverse)
+Phase 4  → AdvancedPersonSearchPlugin (search-path — exact + fuzzy + phonetic)
+Phase 5  → Register assembly + step configurations in PRT
+Phase 6  → Canvas App Screen1 — tglExactMatch wiring + btnSearch updated
+Phase 7  → Backfill existing ~2,000 records
+Phase 8  → AC1–AC4 verification testing
+```
