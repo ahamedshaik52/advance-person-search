@@ -69,12 +69,11 @@ Last Name must allow entry of at least 1 character
 
 Date of Birth must accept values in MM/DD/YYYY, MM/YYYY, or YYYY format
 
-SSN must accept either the full 9-digit value
+SSN must accept either the full 9-digit value or last 4 digit
 
 Person ID must be numeric and contain at least 2 digits
 
-Business Rules
-
+Business Rules:
 
 The system will not execute a search unless at least one valid search identifier is entered.
 
@@ -147,11 +146,7 @@ Then the system must display the message at the top of the results screen:
 “No Matching Person Records Were Found in the System.”
 And keep the results grid empty.
 
-Acceptance Criteria 5 – Align Multi-Field Search with Future Single-Line Behavior
-Given the multi-field search screen is being used as an interim solution,
-When the search logic is executed using the individual fields,
-Then the system must ensure that the supported identifiers and validation rules align with those planned for the single-line search bar,
-So that the algorithm can be transitioned without rework.
+
 
 
 ///////// End of APLT-2631////////////////////////////////////
