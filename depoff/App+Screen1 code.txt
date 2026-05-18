@@ -578,265 +578,56 @@ Screens:
                                          ========================================================= */
                                       If(
                                           varCanSearch,
-                                          If(
-                                              varMatchMode = "Exact",
-                                      
-                                              /* ── EXACT MATCH BRANCH ───────────────────────────── */
-                                              Set(var_dobYear, 0); Set(var_dobMonth, 0); Set(var_dobDay, 0);
-                                              If(
-                                                  !IsBlank(var_dobRaw),
-                                                  If(
-                                                      IsMatch(var_dobClean, "^\d{4}$"),
-                                                      Set(var_dobYear, Value(var_dobClean)),
-                                      
-                                                      IsMatch(var_dobClean, "^(0?[1-9]|1[0-2])/\d{4}$"),
-                                                      Set(var_dobYear,  Value(Last(Split(var_dobClean,  "/")).Value));
-                                                      Set(var_dobMonth, Value(First(Split(var_dobClean, "/")).Value)),
-                                      
-                                                      With(
-                                                          { dp: Split(var_dobClean, "/") },
-                                                          Set(var_dobYear,  Value(Last(dp).Value));
-                                                          Set(var_dobMonth, Value(First(dp).Value));
-                                                          Set(var_dobDay,   Value(Index(dp, 2).Value))
-                                                      )
-                                                  )
+                                          IfError(
+                                              Set(
+                                                  SearchResults,
+                                                  PersonSearchDataFlow.Run(
+                                                      JSON(varSearchRequest, JSONFormat.Compact)
+                                                  ).results
                                               );
-                                      
                                               ClearCollect(
-                                                  colAPS_Results,
-                                                  Filter(
-                                                      Persons,
-                                                      (IsBlank(var_fn)          || 'First Name' = var_fn) &&
-                                                      (IsBlank(var_ln)          || 'Last Name'  = var_ln) &&
-                                                      (IsBlank(var_pidRaw)      || 'Person ID' = var_pidRaw) &&
-                                                      (IsBlank(var_gender.Value)|| Sex = var_gender.Value) &&
-                                                      (
-                                                          IsBlank(var_ssn)                          ||
-                                                          (Len(var_ssn) = 9 && SSN = var_ssn)       ||
-                                                          (Len(var_ssn) = 4 && EndsWith(SSN, var_ssn))
-                                                      )
-                                                  )
-                                              );
-                                      
-                                              If(
-                                                  !IsBlank(var_dobRaw),
-                                                  ClearCollect(
-                                                      colAPS_Results,
-                                                      Filter(
-                                                          colAPS_Results As p,
-                                                          (var_dobYear  = 0 || Year(p.'Date of Birth')  = var_dobYear)  &&
-                                                          (var_dobMonth = 0 || Month(p.'Date of Birth') = var_dobMonth) &&
-                                                          (var_dobDay   = 0 || Day(p.'Date of Birth')   = var_dobDay)
-                                                      )
-                                                  )
-                                              );
-                                      
-                                              If(
-                                                  CountRows(var_race) > 0,
-                                                  ClearCollect(
-                                                      colAPS_Results,
-                                                      Filter(
-                                                          colAPS_Results As p,
-                                                          p.Race.Value in ForAll(var_race As r, r.Value)
-                                                      )
-                                                  )
-                                              );
-                                      
-                                              If(
-                                                  !IsBlank(var_phoneRaw) && Len(var_phoneDigits) >= 10,
-                                                  Clear(colPhoneNums);
+                                                  colAPS_Results_Flat,
                                                   ForAll(
-                                                      colAPS_Results As p,
-                                                      Collect(
-                                                          colPhoneNums,
-                                                          Filter(
-                                                              'Phone Numbers',
-                                                              Person.'Person ID' = p.'Person ID'
-                                                          )
-                                                      )
-                                                  );
-                                                  ClearCollect(
-                                                      colAPS_Results,
-                                                      Filter(
-                                                          colAPS_Results As p,
-                                                          CountRows(
-                                                              Filter(
-                                                                  colPhoneNums As ph,
-                                                                  ph.Person.'Person ID' = p.'Person ID' &&
-                                                                  With(
-                                                                      {
-                                                                          phDigits: Concat(
-                                                                              MatchAll(Coalesce(ph.'Phone Number', ""), "\d"),
-                                                                              FullMatch
-                                                                          )
-                                                                      },
-                                                                      Len(phDigits) >= 10 &&
-                                                                      Right(phDigits, 10) = Right(var_phoneDigits, 10)
-                                                                  )
-                                                              )
-                                                          ) > 0
-                                                      )
-                                                  )
-                                              );
-                                      
-                                              If(
-                                                  !IsBlank(var_addr1) || !IsBlank(var_addr2) ||
-                                                  !IsBlank(var_city)  || !IsBlank(var_state) ||
-                                                  !IsBlank(var_zip)   || !IsBlank(var_county),
-                                                  Clear(colAddressNums);
-                                                  ForAll(
-                                                      colAPS_Results As p,
-                                                      Collect(
-                                                          colAddressNums,
-                                                          Filter(
-                                                              'Person Addresses',
-                                                              Person_PersonAddress.'Person ID' = p.'Person ID' &&
-                                                              Status = 0
-                                                          )
-                                                      )
-                                                  );
-                                                  ClearCollect(
-                                                      colAPS_Results,
-                                                      Filter(
-                                                          colAPS_Results As p,
-                                                          CountRows(
-                                                              Filter(
-                                                                  colAddressNums As a,
-                                                                  a.Person_PersonAddress.'Person ID' = p.'Person ID' &&
-                                                                  (IsBlank(var_addr1)  || Lower(Coalesce(a.'Address Line 1', "")) = var_addr1) &&
-                                                                  (IsBlank(var_addr2)  || Lower(Coalesce(a.'Address Line 2', "")) = var_addr2) &&
-                                                                  (IsBlank(var_city)   || Lower(Coalesce(a.City, "")) = var_city) &&
-                                                                  (IsBlank(var_state)  || Lower(Coalesce(a.State, "")) = var_state) &&
-                                                                  (IsBlank(var_zip)    || Lower(Coalesce(a.'Zip Code', "")) = var_zip) &&
-                                                                  (IsBlank(var_county) || Lower(Coalesce(a.County, "")) = var_county)
-                                                              )
-                                                          ) > 0
-                                                      )
-                                                  )
-                                              );
-                                      
-                                              Clear(colAPS_Results_Flat);
-                                              ForAll(
-                                                  colAPS_Results As p,
-                                                  With(
+                                                      Table(ParseJSON(SearchResults)),
                                                       {
-                                                          displayName: Trim(Coalesce(Text(p.'First Name'), "") & " " & Coalesce(Text(p.'Last Name'), "")),
-                                                          addrs:
-                                                              If(
-                                                                  !IsBlank(var_addr1) || !IsBlank(var_addr2) ||
-                                                                  !IsBlank(var_city)  || !IsBlank(var_state) ||
-                                                                  !IsBlank(var_zip)   || !IsBlank(var_county),
-                                                                  Filter(
-                                                                      colAddressNums As a,
-                                                                      a.Person_PersonAddress.'Person ID' = p.'Person ID' &&
-                                                                      (IsBlank(var_addr1)  || Lower(Coalesce(a.'Address Line 1', "")) = var_addr1) &&
-                                                                      (IsBlank(var_addr2)  || Lower(Coalesce(a.'Address Line 2', "")) = var_addr2) &&
-                                                                      (IsBlank(var_city)   || Lower(Coalesce(a.City, "")) = var_city) &&
-                                                                      (IsBlank(var_state)  || Lower(Coalesce(a.State, "")) = var_state) &&
-                                                                      (IsBlank(var_zip)    || Lower(Coalesce(a.'Zip Code', "")) = var_zip) &&
-                                                                      (IsBlank(var_county) || Lower(Coalesce(a.County, "")) = var_county)
-                                                                  ),
-                                                                  Filter(
-                                                                      'Person Addresses',
-                                                                      Person_PersonAddress.'Person ID' = p.'Person ID' &&
-                                                                      Status = 0
-                                                                  )
-                                                              )
-                                                      },
-                                                      If(
-                                                          CountRows(addrs) = 0,
-                                                          Collect(
-                                                              colAPS_Results_Flat,
-                                                              {
-                                                                  PersonID:    p.'Person ID',
-                                                                  DisplayName: displayName,
-                                                                  DOB:         p.'Date of Birth',
-                                                                  SexLabel:    Coalesce(Text(p.Sex), ""),
-                                                                  SSN:         Coalesce(p.SSN, ""),
-                                                                  FullAddress: "NA"
-                                                              }
+                                                          PersonID: Coalesce(
+                                                              Text(ThisRecord.Value.personId),
+                                                              Text(ThisRecord.Value.PersonID)
                                                           ),
-                                                          With(
-                                                              {
-                                                                  latestAddr: First(
-                                                                      SortByColumns(
-                                                                          addrs,
-                                                                          "cw_startdate",
-                                                                          SortOrder.Descending
-                                                                      )
-                                                                  )
-                                                              },
-                                                              Collect(
-                                                                  colAPS_Results_Flat,
-                                                                  {
-                                                                      PersonID:    p.'Person ID',
-                                                                      DisplayName: displayName,
-                                                                      DOB:         p.'Date of Birth',
-                                                                      SSN:         Coalesce(p.SSN, ""),
-                                                                      SexLabel:    Coalesce(Text(p.Sex), ""),
-                                                                      FullAddress:
-                                                                          Trim(
-                                                                              Coalesce(latestAddr.'Address Line 1', "") &
-                                                                              If(!IsBlank(latestAddr.'Address Line 2'), ", " & latestAddr.'Address Line 2', "") &
-                                                                              If(!IsBlank(latestAddr.City), ", " & latestAddr.City, "") &
-                                                                              If(!IsBlank(latestAddr.State), ", " & latestAddr.State, "") &
-                                                                              If(!IsBlank(latestAddr.'Zip Code'), " " & latestAddr.'Zip Code', "") &
-                                                                              If(!IsBlank(latestAddr.County), ", " & latestAddr.County, "")
-                                                                          )
-                                                                  }
+                                                          DisplayName: Coalesce(
+                                                              Text(ThisRecord.Value.displayName),
+                                                              Trim(
+                                                                  Text(ThisRecord.Value.firstName) & " " &
+                                                                  Text(ThisRecord.Value.lastName)
                                                               )
+                                                          ),
+                                                          DOB: If(
+                                                              IsBlank(Text(ThisRecord.Value.dob)),
+                                                              Blank(),
+                                                              DateValue(Text(ThisRecord.Value.dob))
+                                                          ),
+                                                          SexLabel: Coalesce(
+                                                              Text(ThisRecord.Value.sexLabel),
+                                                              Text(ThisRecord.Value.gender)
+                                                          ),
+                                                          SSN: Text(ThisRecord.Value.ssn),
+                                                          FullAddress: Coalesce(
+                                                              Text(ThisRecord.Value.fullAddress),
+                                                              "NA"
                                                           )
-                                                      )
+                                                      }
                                                   )
-                                              ),
-                                      
-                                              /* ── FUZZY + PHONETIC BRANCH (FLOW/API) ─────────── */
-                                              IfError(
-                                                  Set(
-                                                      SearchResults,
-                                                      PersonSearchDataFlow.Run(
-                                                          JSON(varSearchRequest, JSONFormat.Compact)
-                                                      ).results
-                                                  );
-                                                  ClearCollect(
-                                                      colAPS_Results_Flat,
-                                                      ForAll(
-                                                          Table(ParseJSON(SearchResults)),
-                                                          {
-                                                              PersonID: Coalesce(
-                                                                  Text(ThisRecord.Value.personId),
-                                                                  Text(ThisRecord.Value.PersonID)
-                                                              ),
-                                                              DisplayName: Coalesce(
-                                                                  Text(ThisRecord.Value.displayName),
-                                                                  Trim(
-                                                                      Text(ThisRecord.Value.firstName) & " " &
-                                                                      Text(ThisRecord.Value.lastName)
-                                                                  )
-                                                              ),
-                                                              DOB: If(
-                                                                  IsBlank(Text(ThisRecord.Value.dob)),
-                                                                  Blank(),
-                                                                  DateValue(Text(ThisRecord.Value.dob))
-                                                              ),
-                                                              SexLabel: Coalesce(
-                                                                  Text(ThisRecord.Value.sexLabel),
-                                                                  Text(ThisRecord.Value.gender)
-                                                              ),
-                                                              SSN: Text(ThisRecord.Value.ssn),
-                                                              FullAddress: Coalesce(
-                                                                  Text(ThisRecord.Value.fullAddress),
-                                                                  "NA"
-                                                              )
-                                                          }
-                                                      )
-                                                  ),
-                                                  Set(varAPS_Error, "Search service is temporarily unavailable. Please try again.");
-                                                  Set(varCanSearch, false);
-                                                  Clear(colAPS_Results_Flat)
-                                              )
+                                              );
+                                              Clear(colAPS_Results);
+                                              Clear(colPhoneNums);
+                                              Clear(colAddressNums),
+                                              Set(varAPS_Error, "Search service is temporarily unavailable. Please try again.");
+                                              Set(varCanSearch, false);
+                                              Clear(colAPS_Results);
+                                              Clear(colAPS_Results_Flat);
+                                              Clear(colPhoneNums);
+                                              Clear(colAddressNums)
                                           );
-                                      
                                           If(
                                               CountRows(colAPS_Results_Flat) = 0,
                                               Set(varNoResultsMessage, "No Matching Person Records Were Found in the System."),
@@ -1203,265 +994,56 @@ If(
    ========================================================= */
 If(
     varCanSearch,
-    If(
-        varMatchMode = "Exact",
-
-        /* ── EXACT MATCH BRANCH ───────────────────────────── */
-        Set(var_dobYear, 0); Set(var_dobMonth, 0); Set(var_dobDay, 0);
-        If(
-            !IsBlank(var_dobRaw),
-            If(
-                IsMatch(var_dobClean, "^\d{4}$"),
-                Set(var_dobYear, Value(var_dobClean)),
-
-                IsMatch(var_dobClean, "^(0?[1-9]|1[0-2])/\d{4}$"),
-                Set(var_dobYear,  Value(Last(Split(var_dobClean,  "/")).Value));
-                Set(var_dobMonth, Value(First(Split(var_dobClean, "/")).Value)),
-
-                With(
-                    { dp: Split(var_dobClean, "/") },
-                    Set(var_dobYear,  Value(Last(dp).Value));
-                    Set(var_dobMonth, Value(First(dp).Value));
-                    Set(var_dobDay,   Value(Index(dp, 2).Value))
-                )
-            )
+    IfError(
+        Set(
+            SearchResults,
+            PersonSearchDataFlow.Run(
+                JSON(varSearchRequest, JSONFormat.Compact)
+            ).results
         );
-
         ClearCollect(
-            colAPS_Results,
-            Filter(
-                Persons,
-                (IsBlank(var_fn)          || 'First Name' = var_fn) &&
-                (IsBlank(var_ln)          || 'Last Name'  = var_ln) &&
-                (IsBlank(var_pidRaw)      || 'Person ID' = var_pidRaw) &&
-                (IsBlank(var_gender.Value)|| Sex = var_gender.Value) &&
-                (
-                    IsBlank(var_ssn)                          ||
-                    (Len(var_ssn) = 9 && SSN = var_ssn)       ||
-                    (Len(var_ssn) = 4 && EndsWith(SSN, var_ssn))
-                )
-            )
-        );
-
-        If(
-            !IsBlank(var_dobRaw),
-            ClearCollect(
-                colAPS_Results,
-                Filter(
-                    colAPS_Results As p,
-                    (var_dobYear  = 0 || Year(p.'Date of Birth')  = var_dobYear)  &&
-                    (var_dobMonth = 0 || Month(p.'Date of Birth') = var_dobMonth) &&
-                    (var_dobDay   = 0 || Day(p.'Date of Birth')   = var_dobDay)
-                )
-            )
-        );
-
-        If(
-            CountRows(var_race) > 0,
-            ClearCollect(
-                colAPS_Results,
-                Filter(
-                    colAPS_Results As p,
-                    p.Race.Value in ForAll(var_race As r, r.Value)
-                )
-            )
-        );
-
-        If(
-            !IsBlank(var_phoneRaw) && Len(var_phoneDigits) >= 10,
-            Clear(colPhoneNums);
+            colAPS_Results_Flat,
             ForAll(
-                colAPS_Results As p,
-                Collect(
-                    colPhoneNums,
-                    Filter(
-                        'Phone Numbers',
-                        Person.'Person ID' = p.'Person ID'
-                    )
-                )
-            );
-            ClearCollect(
-                colAPS_Results,
-                Filter(
-                    colAPS_Results As p,
-                    CountRows(
-                        Filter(
-                            colPhoneNums As ph,
-                            ph.Person.'Person ID' = p.'Person ID' &&
-                            With(
-                                {
-                                    phDigits: Concat(
-                                        MatchAll(Coalesce(ph.'Phone Number', ""), "\d"),
-                                        FullMatch
-                                    )
-                                },
-                                Len(phDigits) >= 10 &&
-                                Right(phDigits, 10) = Right(var_phoneDigits, 10)
-                            )
-                        )
-                    ) > 0
-                )
-            )
-        );
-
-        If(
-            !IsBlank(var_addr1) || !IsBlank(var_addr2) ||
-            !IsBlank(var_city)  || !IsBlank(var_state) ||
-            !IsBlank(var_zip)   || !IsBlank(var_county),
-            Clear(colAddressNums);
-            ForAll(
-                colAPS_Results As p,
-                Collect(
-                    colAddressNums,
-                    Filter(
-                        'Person Addresses',
-                        Person_PersonAddress.'Person ID' = p.'Person ID' &&
-                        Status = 0
-                    )
-                )
-            );
-            ClearCollect(
-                colAPS_Results,
-                Filter(
-                    colAPS_Results As p,
-                    CountRows(
-                        Filter(
-                            colAddressNums As a,
-                            a.Person_PersonAddress.'Person ID' = p.'Person ID' &&
-                            (IsBlank(var_addr1)  || Lower(Coalesce(a.'Address Line 1', "")) = var_addr1) &&
-                            (IsBlank(var_addr2)  || Lower(Coalesce(a.'Address Line 2', "")) = var_addr2) &&
-                            (IsBlank(var_city)   || Lower(Coalesce(a.City, "")) = var_city) &&
-                            (IsBlank(var_state)  || Lower(Coalesce(a.State, "")) = var_state) &&
-                            (IsBlank(var_zip)    || Lower(Coalesce(a.'Zip Code', "")) = var_zip) &&
-                            (IsBlank(var_county) || Lower(Coalesce(a.County, "")) = var_county)
-                        )
-                    ) > 0
-                )
-            )
-        );
-
-        Clear(colAPS_Results_Flat);
-        ForAll(
-            colAPS_Results As p,
-            With(
+                Table(ParseJSON(SearchResults)),
                 {
-                    displayName: Trim(Coalesce(Text(p.'First Name'), "") & " " & Coalesce(Text(p.'Last Name'), "")),
-                    addrs:
-                        If(
-                            !IsBlank(var_addr1) || !IsBlank(var_addr2) ||
-                            !IsBlank(var_city)  || !IsBlank(var_state) ||
-                            !IsBlank(var_zip)   || !IsBlank(var_county),
-                            Filter(
-                                colAddressNums As a,
-                                a.Person_PersonAddress.'Person ID' = p.'Person ID' &&
-                                (IsBlank(var_addr1)  || Lower(Coalesce(a.'Address Line 1', "")) = var_addr1) &&
-                                (IsBlank(var_addr2)  || Lower(Coalesce(a.'Address Line 2', "")) = var_addr2) &&
-                                (IsBlank(var_city)   || Lower(Coalesce(a.City, "")) = var_city) &&
-                                (IsBlank(var_state)  || Lower(Coalesce(a.State, "")) = var_state) &&
-                                (IsBlank(var_zip)    || Lower(Coalesce(a.'Zip Code', "")) = var_zip) &&
-                                (IsBlank(var_county) || Lower(Coalesce(a.County, "")) = var_county)
-                            ),
-                            Filter(
-                                'Person Addresses',
-                                Person_PersonAddress.'Person ID' = p.'Person ID' &&
-                                Status = 0
-                            )
-                        )
-                },
-                If(
-                    CountRows(addrs) = 0,
-                    Collect(
-                        colAPS_Results_Flat,
-                        {
-                            PersonID:    p.'Person ID',
-                            DisplayName: displayName,
-                            DOB:         p.'Date of Birth',
-                            SexLabel:    Coalesce(Text(p.Sex), ""),
-                            SSN:         Coalesce(p.SSN, ""),
-                            FullAddress: "NA"
-                        }
+                    PersonID: Coalesce(
+                        Text(ThisRecord.Value.personId),
+                        Text(ThisRecord.Value.PersonID)
                     ),
-                    With(
-                        {
-                            latestAddr: First(
-                                SortByColumns(
-                                    addrs,
-                                    "cw_startdate",
-                                    SortOrder.Descending
-                                )
-                            )
-                        },
-                        Collect(
-                            colAPS_Results_Flat,
-                            {
-                                PersonID:    p.'Person ID',
-                                DisplayName: displayName,
-                                DOB:         p.'Date of Birth',
-                                SSN:         Coalesce(p.SSN, ""),
-                                SexLabel:    Coalesce(Text(p.Sex), ""),
-                                FullAddress:
-                                    Trim(
-                                        Coalesce(latestAddr.'Address Line 1', "") &
-                                        If(!IsBlank(latestAddr.'Address Line 2'), ", " & latestAddr.'Address Line 2', "") &
-                                        If(!IsBlank(latestAddr.City), ", " & latestAddr.City, "") &
-                                        If(!IsBlank(latestAddr.State), ", " & latestAddr.State, "") &
-                                        If(!IsBlank(latestAddr.'Zip Code'), " " & latestAddr.'Zip Code', "") &
-                                        If(!IsBlank(latestAddr.County), ", " & latestAddr.County, "")
-                                    )
-                            }
+                    DisplayName: Coalesce(
+                        Text(ThisRecord.Value.displayName),
+                        Trim(
+                            Text(ThisRecord.Value.firstName) & " " &
+                            Text(ThisRecord.Value.lastName)
                         )
+                    ),
+                    DOB: If(
+                        IsBlank(Text(ThisRecord.Value.dob)),
+                        Blank(),
+                        DateValue(Text(ThisRecord.Value.dob))
+                    ),
+                    SexLabel: Coalesce(
+                        Text(ThisRecord.Value.sexLabel),
+                        Text(ThisRecord.Value.gender)
+                    ),
+                    SSN: Text(ThisRecord.Value.ssn),
+                    FullAddress: Coalesce(
+                        Text(ThisRecord.Value.fullAddress),
+                        "NA"
                     )
-                )
+                }
             )
-        ),
-
-        /* ── FUZZY + PHONETIC BRANCH (FLOW/API) ─────────── */
-        IfError(
-            Set(
-                SearchResults,
-                PersonSearchDataFlow.Run(
-                    JSON(varSearchRequest, JSONFormat.Compact)
-                ).results
-            );
-            ClearCollect(
-                colAPS_Results_Flat,
-                ForAll(
-                    Table(ParseJSON(SearchResults)),
-                    {
-                        PersonID: Coalesce(
-                            Text(ThisRecord.Value.personId),
-                            Text(ThisRecord.Value.PersonID)
-                        ),
-                        DisplayName: Coalesce(
-                            Text(ThisRecord.Value.displayName),
-                            Trim(
-                                Text(ThisRecord.Value.firstName) & " " &
-                                Text(ThisRecord.Value.lastName)
-                            )
-                        ),
-                        DOB: If(
-                            IsBlank(Text(ThisRecord.Value.dob)),
-                            Blank(),
-                            DateValue(Text(ThisRecord.Value.dob))
-                        ),
-                        SexLabel: Coalesce(
-                            Text(ThisRecord.Value.sexLabel),
-                            Text(ThisRecord.Value.gender)
-                        ),
-                        SSN: Text(ThisRecord.Value.ssn),
-                        FullAddress: Coalesce(
-                            Text(ThisRecord.Value.fullAddress),
-                            "NA"
-                        )
-                    }
-                )
-            ),
-            Set(varAPS_Error, "Search service is temporarily unavailable. Please try again.");
-            Set(varCanSearch, false);
-            Clear(colAPS_Results_Flat)
-        )
+        );
+        Clear(colAPS_Results);
+        Clear(colPhoneNums);
+        Clear(colAddressNums),
+        Set(varAPS_Error, "Search service is temporarily unavailable. Please try again.");
+        Set(varCanSearch, false);
+        Clear(colAPS_Results);
+        Clear(colAPS_Results_Flat);
+        Clear(colPhoneNums);
+        Clear(colAddressNums)
     );
-
     If(
         CountRows(colAPS_Results_Flat) = 0,
         Set(varNoResultsMessage, "No Matching Person Records Were Found in the System."),
