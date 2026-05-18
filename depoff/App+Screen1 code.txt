@@ -830,7 +830,7 @@ Screens:
                                                               )
                                                           }
                                                       )
-                                                  );
+                                                  ),
                                                   Set(varAPS_Error, "Search service is temporarily unavailable. Please try again.");
                                                   Set(varCanSearch, false);
                                                   Clear(colAPS_Results_Flat)
@@ -1455,7 +1455,7 @@ If(
                         )
                     }
                 )
-            );
+            ),
             Set(varAPS_Error, "Search service is temporarily unavailable. Please try again.");
             Set(varCanSearch, false);
             Clear(colAPS_Results_Flat)
