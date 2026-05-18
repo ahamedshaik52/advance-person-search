@@ -98,7 +98,12 @@ Screens:
                               Height: =25
                               LayoutMinHeight: =16
                               LayoutMinWidth: =16
-                              Text: ="Search Results"
+                              Text: |-
+                                =If(
+                                    CountRows(colAPS_Results_Flat) = 0 && !IsBlank(varNoResultsMessage),
+                                    varNoResultsMessage,
+                                    "Search Results"
+                                )
                               VerticalAlignment: =VerticalAlign.Top
                   - Container4:
                       Control: GroupContainer@1.5.0
