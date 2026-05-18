@@ -721,7 +721,27 @@ Screens:
                                                   With(
                                                       {
                                                           displayName: Trim(Coalesce(Text(p.'First Name'), "") & " " & Coalesce(Text(p.'Last Name'), "")),
-                                                          addrs: Filter('Person Addresses', Person_PersonAddress.'Person ID' = p.'Person ID' && Status = 0)
+                                                          addrs:
+                                                              If(
+                                                                  !IsBlank(var_addr1) || !IsBlank(var_addr2) ||
+                                                                  !IsBlank(var_city)  || !IsBlank(var_state) ||
+                                                                  !IsBlank(var_zip)   || !IsBlank(var_county),
+                                                                  Filter(
+                                                                      colAddressNums As a,
+                                                                      a.Person_PersonAddress.'Person ID' = p.'Person ID' &&
+                                                                      (IsBlank(var_addr1)  || Lower(Coalesce(a.'Address Line 1', "")) = var_addr1) &&
+                                                                      (IsBlank(var_addr2)  || Lower(Coalesce(a.'Address Line 2', "")) = var_addr2) &&
+                                                                      (IsBlank(var_city)   || Lower(Coalesce(a.City, "")) = var_city) &&
+                                                                      (IsBlank(var_state)  || Lower(Coalesce(a.State, "")) = var_state) &&
+                                                                      (IsBlank(var_zip)    || Lower(Coalesce(a.'Zip Code', "")) = var_zip) &&
+                                                                      (IsBlank(var_county) || Lower(Coalesce(a.County, "")) = var_county)
+                                                                  ),
+                                                                  Filter(
+                                                                      'Person Addresses',
+                                                                      Person_PersonAddress.'Person ID' = p.'Person ID' &&
+                                                                      Status = 0
+                                                                  )
+                                                              )
                                                       },
                                                       If(
                                                           CountRows(addrs) = 0,
@@ -1326,7 +1346,27 @@ If(
             With(
                 {
                     displayName: Trim(Coalesce(Text(p.'First Name'), "") & " " & Coalesce(Text(p.'Last Name'), "")),
-                    addrs: Filter('Person Addresses', Person_PersonAddress.'Person ID' = p.'Person ID' && Status = 0)
+                    addrs:
+                        If(
+                            !IsBlank(var_addr1) || !IsBlank(var_addr2) ||
+                            !IsBlank(var_city)  || !IsBlank(var_state) ||
+                            !IsBlank(var_zip)   || !IsBlank(var_county),
+                            Filter(
+                                colAddressNums As a,
+                                a.Person_PersonAddress.'Person ID' = p.'Person ID' &&
+                                (IsBlank(var_addr1)  || Lower(Coalesce(a.'Address Line 1', "")) = var_addr1) &&
+                                (IsBlank(var_addr2)  || Lower(Coalesce(a.'Address Line 2', "")) = var_addr2) &&
+                                (IsBlank(var_city)   || Lower(Coalesce(a.City, "")) = var_city) &&
+                                (IsBlank(var_state)  || Lower(Coalesce(a.State, "")) = var_state) &&
+                                (IsBlank(var_zip)    || Lower(Coalesce(a.'Zip Code', "")) = var_zip) &&
+                                (IsBlank(var_county) || Lower(Coalesce(a.County, "")) = var_county)
+                            ),
+                            Filter(
+                                'Person Addresses',
+                                Person_PersonAddress.'Person ID' = p.'Person ID' &&
+                                Status = 0
+                            )
+                        )
                 },
                 If(
                     CountRows(addrs) = 0,
