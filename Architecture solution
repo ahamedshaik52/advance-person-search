@@ -1,1 +1,1470 @@
 
+---
+
+# ✅ REVISED COMPLETE IMPLEMENTATION — No Azure AD App Registration
+## Table: `cw_contact` | Soundex Columns: `cw_soundexfirstname` / `cw_soundexlastname`
+
+---
+
+## ⚠️ CRITICAL NOTE — Dataverse Column Logical Names
+
+You entered schema names `cw_SoundexFirstName` and `cw_SoundexLastName` in the Dataverse UI. **Dataverse always stores logical names in lowercase.** In all code, use:
+
+```
+cw_soundexfirstname   ← always lowercase in code/queries
+cw_soundexlastname    ← always lowercase in code/queries
+```
+
+---
+
+## WHAT CHANGES vs. THE PREVIOUS PLAN
+
+| Item | Before | After |
+|---|---|---|
+| Table name | `cw_person` | `cw_contact` |
+| Azure AD App Registration | Required | ❌ NOT NEEDED |
+| `TokenHelper.cs` | Required | ❌ REMOVED |
+| `PluginConfig.cs` | Required | ❌ REMOVED |
+| Fuzzy search engine | Dataverse Search API (Lucene ~1) via HTTP | QueryExpression Contains + Soundex |
+| Phonetic search | Soundex pre-computed columns | Same ✅ |
+| Backfill | Manual | Power Automate Flow ✅ |
+| PRT Secure Config | OAuth JSON required | Not needed |
+
+**Why C# plugins are still needed (even without Azure AD):**
+- `PersonSoundexPlugin` — Soundex algorithm must run at write time. Power Automate has no Soundex function.
+- `AdvancedPersonSearchPlugin` — Handles all QueryExpression logic server-side without any HTTP calls or external auth. Only uses `IOrganizationService` which Dataverse provides automatically.
+
+---
+
+## PART B (REVISED) — FINAL C# CODE — 5 Files Only
+
+### File Structure
+```
+ALPT2635.Plugins/
+├── ALPT2635.Plugins.csproj
+├── ALPT2635.Plugins.snk
+├── Helpers/
+│   ├── SearchModels.cs
+│   └── SoundexHelper.cs
+├── PersonSoundexPlugin.cs
+└── AdvancedPersonSearchPlugin.cs
+```
+> `PluginConfig.cs` and `TokenHelper.cs` **deleted** — no longer needed.
+
+---
+
+### FILE 1: `ALPT2635.Plugins.csproj`
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" />
+
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <OutputType>Library</OutputType>
+    <RootNamespace>ALPT2635.Plugins</RootNamespace>
+    <AssemblyName>ALPT2635.Plugins</AssemblyName>
+    <TargetFrameworkVersion>v4.6.2</TargetFrameworkVersion>
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>ALPT2635.Plugins.snk</AssemblyOriginatorKeyFile>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <OutputPath>bin\Release\</OutputPath>
+    <Optimize>true</Optimize>
+    <DebugType>pdbonly</DebugType>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Microsoft.Crm.Sdk.Proxy"><Private>false</Private></Reference>
+    <Reference Include="Microsoft.Xrm.Sdk"><Private>false</Private></Reference>
+    <Reference Include="System" />
+    <Reference Include="System.Runtime.Serialization" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Helpers\SearchModels.cs" />
+    <Compile Include="Helpers\SoundexHelper.cs" />
+    <Compile Include="PersonSoundexPlugin.cs" />
+    <Compile Include="AdvancedPersonSearchPlugin.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CrmSdk.CoreAssemblies" Version="9.0.2.49" />
+  </ItemGroup>
+
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
+```
+
+---
+
+### FILE 2: `Helpers/SearchModels.cs`
+
+```csharp
+using System.Collections.Generic;
+using System.IO;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
+using System.Text;
+
+namespace ALPT2635.Plugins.Helpers
+{
+    // ─── Input Parameters ────────────────────────────────────────────────────
+    internal sealed class SearchInputParameters
+    {
+        public string FirstName    { get; set; }
+        public string LastName     { get; set; }
+        public string Dob          { get; set; }   // "MM/dd/yyyy" or blank
+        public string PersonId     { get; set; }
+        public string Ssn          { get; set; }
+        public string PhoneNumber  { get; set; }
+        public string AddressLine1 { get; set; }
+        public string AddressLine2 { get; set; }
+        public string City         { get; set; }
+        public string State        { get; set; }
+        public string ZipCode      { get; set; }
+        public string County       { get; set; }
+        public string Gender       { get; set; }   // numeric int string e.g. "471560000"
+        public string RaceValues   { get; set; }   // comma-separated int strings
+        public bool   IsExactMatch { get; set; }
+    }
+
+    // ─── Search Result (SSN excluded — not shown on card) ────────────────────
+    [DataContract]
+    internal sealed class PersonSearchResult
+    {
+        [DataMember(Name = "personId")]
+        public string PersonId    { get; set; }
+
+        [DataMember(Name = "displayName")]
+        public string DisplayName { get; set; }
+
+        [DataMember(Name = "dob")]
+        public string Dob         { get; set; }   // "MM/dd/yyyy"
+
+        [DataMember(Name = "sexLabel")]
+        public string SexLabel    { get; set; }
+
+        [DataMember(Name = "fullAddress")]
+        public string FullAddress { get; set; }
+    }
+
+    // ─── API Response Envelope ───────────────────────────────────────────────
+    [DataContract]
+    internal sealed class SearchApiResponse
+    {
+        [DataMember(Name = "success")]
+        public bool Success { get; set; }
+
+        [DataMember(Name = "results")]
+        public List<PersonSearchResult> Results { get; set; }
+
+        [DataMember(Name = "totalCount")]
+        public int TotalCount { get; set; }
+
+        [DataMember(Name = "errorMessage")]
+        public string ErrorMessage { get; set; }
+
+        public string ToJson()
+        {
+            using (var ms = new MemoryStream())
+            {
+                var ser = new DataContractJsonSerializer(typeof(SearchApiResponse));
+                ser.WriteObject(ms, this);
+                return Encoding.UTF8.GetString(ms.ToArray());
+            }
+        }
+
+        public static SearchApiResponse Error(string message) =>
+            new SearchApiResponse
+            {
+                Success      = false,
+                Results      = new List<PersonSearchResult>(),
+                TotalCount   = 0,
+                ErrorMessage = message
+            };
+    }
+}
+```
+
+---
+
+### FILE 3: `Helpers/SoundexHelper.cs` *(unchanged — still needed for search-time computation)*
+
+```csharp
+using System.Text;
+
+namespace ALPT2635.Plugins.Helpers
+{
+    /// <summary>
+    /// US Russell Soundex. Returns exactly 4 characters.
+    /// John→J500, Jhon→J500, Smith→S530, Smyth→S530, Fisher→F260, Fischer→F260
+    /// </summary>
+    internal static class SoundexHelper
+    {
+        private static readonly char[] _codeMap = new char[26];
+
+        static SoundexHelper()
+        {
+            for (int i = 0; i < 26; i++) _codeMap[i] = '0';
+            foreach (char c in "BFPV")     _codeMap[c - 'A'] = '1';
+            foreach (char c in "CGJKQSXZ") _codeMap[c - 'A'] = '2';
+            foreach (char c in "DT")       _codeMap[c - 'A'] = '3';
+            _codeMap['L' - 'A'] = '4';
+            foreach (char c in "MN")       _codeMap[c - 'A'] = '5';
+            _codeMap['R' - 'A'] = '6';
+        }
+
+        public static string Compute(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input)) return "0000";
+
+            var sb = new StringBuilder();
+            foreach (char c in input)
+                if (char.IsLetter(c)) sb.Append(char.ToUpperInvariant(c));
+
+            if (sb.Length == 0) return "0000";
+
+            string letters  = sb.ToString();
+            char   first    = letters[0];
+            var    result   = new StringBuilder();
+            result.Append(first);
+            char prevCode = GetCode(first);
+
+            for (int i = 1; i < letters.Length && result.Length < 4; i++)
+            {
+                char ch   = letters[i];
+                char code = GetCode(ch);
+                if (ch == 'H' || ch == 'W') continue;
+                if (code == '0') { prevCode = '0'; continue; }
+                if (code != prevCode) { result.Append(code); prevCode = code; }
+            }
+
+            while (result.Length < 4) result.Append('0');
+            return result.ToString();
+        }
+
+        private static char GetCode(char c)
+        {
+            int idx = c - 'A';
+            return (idx >= 0 && idx < 26) ? _codeMap[idx] : '0';
+        }
+    }
+}
+```
+
+---
+
+### FILE 4: `PersonSoundexPlugin.cs` *(updated table/column names only)*
+
+```csharp
+using ALPT2635.Plugins.Helpers;
+using Microsoft.Xrm.Sdk;
+
+namespace ALPT2635.Plugins
+{
+    /// <summary>
+    /// Registered: Post-operation, Async (Stage 40) on cw_contact Create + Update.
+    /// Pre-Image "PreImage" required on Update step.
+    /// Filtering Attributes on Update step: cw_firstname, cw_lastname
+    /// Does NOT require Azure AD — uses IOrganizationService only.
+    /// </summary>
+    public sealed class PersonSoundexPlugin : IPlugin
+    {
+        // ── Verify these logical names match YOUR cw_contact table ───────────
+        private const string TblContact      = "cw_contact";
+        private const string ColFirstName    = "cw_firstname";
+        private const string ColLastName     = "cw_lastname";
+        private const string ColSoundexFirst = "cw_soundexfirstname";  // lowercase
+        private const string ColSoundexLast  = "cw_soundexlastname";   // lowercase
+
+        public void Execute(IServiceProvider serviceProvider)
+        {
+            var context = (IPluginExecutionContext)
+                serviceProvider.GetService(typeof(IPluginExecutionContext));
+
+            if (context.Depth > 2) return;
+
+            var factory = (IOrganizationServiceFactory)
+                serviceProvider.GetService(typeof(IOrganizationServiceFactory));
+            var svc = factory.CreateOrganizationService(context.UserId);
+
+            var target = (Entity)context.InputParameters["Target"];
+
+            string firstName, lastName;
+
+            if (context.MessageName == "Create")
+            {
+                firstName = target.GetAttributeValue<string>(ColFirstName);
+                lastName  = target.GetAttributeValue<string>(ColLastName);
+            }
+            else if (context.MessageName == "Update")
+            {
+                Entity preImage = context.PreEntityImages.Contains("PreImage")
+                    ? context.PreEntityImages["PreImage"] : null;
+
+                firstName = target.Contains(ColFirstName)
+                    ? target.GetAttributeValue<string>(ColFirstName)
+                    : preImage?.GetAttributeValue<string>(ColFirstName);
+
+                lastName = target.Contains(ColLastName)
+                    ? target.GetAttributeValue<string>(ColLastName)
+                    : preImage?.GetAttributeValue<string>(ColLastName);
+
+                // Infinite-loop guard: skip if Soundex unchanged
+                var currentSdxFirst = preImage?.GetAttributeValue<string>(ColSoundexFirst);
+                var currentSdxLast  = preImage?.GetAttributeValue<string>(ColSoundexLast);
+                var newSdxFirst     = SoundexHelper.Compute(firstName);
+                var newSdxLast      = SoundexHelper.Compute(lastName);
+
+                if (newSdxFirst == currentSdxFirst && newSdxLast == currentSdxLast)
+                    return;
+            }
+            else
+            {
+                return;
+            }
+
+            var update = new Entity(TblContact, target.Id);
+            update[ColSoundexFirst] = SoundexHelper.Compute(firstName);
+            update[ColSoundexLast]  = SoundexHelper.Compute(lastName);
+            svc.Update(update);
+        }
+    }
+}
+```
+
+---
+
+### FILE 5: `AdvancedPersonSearchPlugin.cs` *(no Azure AD, no HTTP — QueryExpression only)*
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Text;
+using ALPT2635.Plugins.Helpers;
+using Microsoft.Xrm.Sdk;
+using Microsoft.Xrm.Sdk.Query;
+
+namespace ALPT2635.Plugins
+{
+    /// <summary>
+    /// Registered on Custom API: cw_AdvancedPersonSearch
+    /// Stage: Pre-operation (20), Synchronous
+    /// NO Azure AD App Registration required — uses IOrganizationService only.
+    /// Fuzzy search: QueryExpression Contains + pre-computed Soundex columns.
+    /// </summary>
+    public sealed class AdvancedPersonSearchPlugin : IPlugin
+    {
+        // ── Verify ALL logical names match YOUR environment ──────────────────
+        // Table names
+        private const string TblContact  = "cw_contact";
+        private const string TblPhone    = "cw_phonenumber";
+        private const string TblAddress  = "cw_personaddress";   // verify this name
+
+        // cw_contact columns
+        private const string ColContactId    = "cw_contactid";   // primary key — usually tablename + "id"
+        private const string ColFirstName    = "cw_firstname";
+        private const string ColLastName     = "cw_lastname";
+        private const string ColDob          = "cw_dateofbirth";
+        private const string ColSsn          = "cw_ssn";
+        private const string ColSex          = "cw_sex";
+        private const string ColRace         = "cw_race";
+        private const string ColSoundexFirst = "cw_soundexfirstname";
+        private const string ColSoundexLast  = "cw_soundexlastname";
+
+        // cw_phonenumber columns
+        private const string ColPhonePersonRef = "cw_contactid";  // lookup column to cw_contact
+        private const string ColPhoneNumber    = "cw_phonenumber";
+
+        // cw_personaddress columns
+        private const string ColAddrPersonRef  = "cw_contactid";  // lookup column to cw_contact
+        private const string ColAddrLine1      = "cw_addressline1";
+        private const string ColAddrLine2      = "cw_addressline2";
+        private const string ColAddrCity       = "cw_city";
+        private const string ColAddrState      = "cw_state";
+        private const string ColAddrZip        = "cw_zipcode";
+        private const string ColAddrCounty     = "cw_county";
+
+        private const int MaxResults        = 200;
+        private const int InClauseBatchSize = 100;  // BUG FIX #6
+
+        // Constructor — no config needed (no OAuth)
+        public AdvancedPersonSearchPlugin() { }
+        public AdvancedPersonSearchPlugin(string unsecureConfig, string secureConfig) { }
+
+        public void Execute(IServiceProvider serviceProvider)
+        {
+            var context = (IPluginExecutionContext)
+                serviceProvider.GetService(typeof(IPluginExecutionContext));
+            var factory = (IOrganizationServiceFactory)
+                serviceProvider.GetService(typeof(IOrganizationServiceFactory));
+            var svc = factory.CreateOrganizationService(context.UserId);
+
+            try
+            {
+                var p = ExtractParameters(context);
+                var results = p.IsExactMatch
+                    ? RunExactSearch(svc, p)
+                    : RunFuzzySearch(svc, p);
+
+                var response = new SearchApiResponse
+                {
+                    Success    = true,
+                    Results    = results,
+                    TotalCount = results.Count
+                };
+
+                context.OutputParameters["cw_searchresults"] = response.ToJson();
+                context.OutputParameters["cw_success"]       = true;
+                context.OutputParameters["cw_errormessage"]  = string.Empty;
+            }
+            catch (InvalidPluginExecutionException) { throw; }
+            catch (Exception ex)
+            {
+                var errResp = SearchApiResponse.Error($"Search error: {ex.Message}");
+                context.OutputParameters["cw_searchresults"] = errResp.ToJson();
+                context.OutputParameters["cw_success"]       = false;
+                context.OutputParameters["cw_errormessage"]  = ex.Message;
+            }
+        }
+
+        // ═════════════════════════════════════════════════════════════════════
+        // PATH A — EXACT SEARCH
+        // ═════════════════════════════════════════════════════════════════════
+        private List<PersonSearchResult> RunExactSearch(IOrganizationService svc,
+                                                         SearchInputParameters p)
+        {
+            var qe = BuildBaseQuery();
+
+            // Name — exact equal
+            if (!string.IsNullOrWhiteSpace(p.FirstName))
+                qe.Criteria.AddCondition(ColFirstName, ConditionOperator.Equal,
+                    p.FirstName.Trim());
+            if (!string.IsNullOrWhiteSpace(p.LastName))
+                qe.Criteria.AddCondition(ColLastName, ConditionOperator.Equal,
+                    p.LastName.Trim());
+
+            ApplySharedFilters(qe, p);
+            AddPhoneJoin(qe, p);
+            AddAddressJoin(qe, p);
+
+            return HydrateResults(svc, svc.RetrieveMultiple(qe).Entities);
+        }
+
+        // ═════════════════════════════════════════════════════════════════════
+        // PATH B — FUZZY + PHONETIC SEARCH (no HTTP, no Azure AD)
+        // AC2: Contains search handles partial/typo matching
+        // AC3: Soundex search handles phonetic matching
+        // ═════════════════════════════════════════════════════════════════════
+        private List<PersonSearchResult> RunFuzzySearch(IOrganizationService svc,
+                                                         SearchInputParameters p)
+        {
+            var allGuids = new HashSet<Guid>();
+            bool hasNameInput = !string.IsNullOrWhiteSpace(p.FirstName)
+                             || !string.IsNullOrWhiteSpace(p.LastName);
+
+            if (hasNameInput)
+            {
+                // B1: Contains search — catches partial matches and common typos
+                allGuids.UnionWith(ExecuteContainsSearch(svc, p));
+
+                // B2: Soundex phonetic search — catches phonetic variants
+                allGuids.UnionWith(ExecuteSoundexSearch(svc, p));
+            }
+
+            // If no name provided or no candidates found, fall back to exact path
+            if (allGuids.Count == 0)
+                return RunExactSearch(svc, p);
+
+            // Apply all non-name filters on the merged candidate set
+            return ApplyPostFilters(svc, allGuids, p);
+        }
+
+        // ─── B1: Contains search ─────────────────────────────────────────────
+        private List<Guid> ExecuteContainsSearch(IOrganizationService svc,
+                                                  SearchInputParameters p)
+        {
+            var guids = new List<Guid>();
+            var qe    = new QueryExpression(TblContact)
+            {
+                ColumnSet = new ColumnSet(false),  // ID only
+                TopCount  = MaxResults,
+                NoLock    = true
+            };
+
+            // Use OR filter — match if either name contains the input
+            var nameFilter = new FilterExpression(LogicalOperator.Or);
+            if (!string.IsNullOrWhiteSpace(p.FirstName))
+                nameFilter.AddCondition(ColFirstName, ConditionOperator.Contains,
+                    p.FirstName.Trim());
+            if (!string.IsNullOrWhiteSpace(p.LastName))
+                nameFilter.AddCondition(ColLastName, ConditionOperator.Contains,
+                    p.LastName.Trim());
+
+            qe.Criteria.AddFilter(nameFilter);
+
+            foreach (var e in svc.RetrieveMultiple(qe).Entities)
+                guids.Add(e.Id);
+            return guids;
+        }
+
+        // ─── B2: Soundex phonetic search ─────────────────────────────────────
+        private List<Guid> ExecuteSoundexSearch(IOrganizationService svc,
+                                                 SearchInputParameters p)
+        {
+            var guids = new List<Guid>();
+            var qe    = new QueryExpression(TblContact)
+            {
+                ColumnSet = new ColumnSet(false),
+                TopCount  = MaxResults,
+                NoLock    = true
+            };
+
+            bool hasFilter = false;
+
+            if (!string.IsNullOrWhiteSpace(p.FirstName))
+            {
+                qe.Criteria.AddCondition(ColSoundexFirst, ConditionOperator.Equal,
+                    SoundexHelper.Compute(p.FirstName.Trim()));
+                hasFilter = true;
+            }
+            if (!string.IsNullOrWhiteSpace(p.LastName))
+            {
+                qe.Criteria.AddCondition(ColSoundexLast, ConditionOperator.Equal,
+                    SoundexHelper.Compute(p.LastName.Trim()));
+                hasFilter = true;
+            }
+
+            if (!hasFilter) return guids;
+
+            foreach (var e in svc.RetrieveMultiple(qe).Entities)
+                guids.Add(e.Id);
+            return guids;
+        }
+
+        // ─── Post-filter merged candidate GUIDs ──────────────────────────────
+        private List<PersonSearchResult> ApplyPostFilters(IOrganizationService svc,
+                                                           HashSet<Guid> candidateGuids,
+                                                           SearchInputParameters p)
+        {
+            var allEntities = new List<Entity>();
+            var guidList    = new List<Guid>(candidateGuids);
+
+            // BUG FIX #6: batch 100 GUIDs per IN clause
+            for (int i = 0; i < guidList.Count; i += InClauseBatchSize)
+            {
+                var batch      = guidList.GetRange(i,
+                    Math.Min(InClauseBatchSize, guidList.Count - i));
+                var batchArray = batch.ConvertAll(g => (object)g).ToArray();
+
+                var qe = BuildBaseQuery();
+                qe.Criteria.AddCondition(TblContact + "id",
+                    ConditionOperator.In, batchArray);
+
+                ApplySharedFilters(qe, p);
+                AddPhoneJoin(qe, p);
+                AddAddressJoin(qe, p);
+
+                allEntities.AddRange(svc.RetrieveMultiple(qe).Entities);
+            }
+
+            return HydrateResults(svc, allEntities);
+        }
+
+        // ═════════════════════════════════════════════════════════════════════
+        // SHARED FILTER HELPERS
+        // ═════════════════════════════════════════════════════════════════════
+
+        /// <summary>Applies SSN, Gender, Race, DOB filters.</summary>
+        private static void ApplySharedFilters(QueryExpression qe, SearchInputParameters p)
+        {
+            // Person ID
+            if (!string.IsNullOrWhiteSpace(p.PersonId)
+                && int.TryParse(p.PersonId, out var pidInt))
+                qe.Criteria.AddCondition("cw_personid", ConditionOperator.Equal, pidInt);
+
+            // SSN — last 4 or full 9
+            if (!string.IsNullOrWhiteSpace(p.Ssn))
+            {
+                if (p.Ssn.Length == 4)
+                    qe.Criteria.AddCondition(ColSsn, ConditionOperator.EndsWith, p.Ssn);
+                else
+                    qe.Criteria.AddCondition(ColSsn, ConditionOperator.Equal, p.Ssn);
+            }
+
+            // Gender (option set integer)
+            if (!string.IsNullOrWhiteSpace(p.Gender)
+                && int.TryParse(p.Gender, out var gCode))
+                qe.Criteria.AddCondition(ColSex, ConditionOperator.Equal, gCode);
+
+            // Race (multi-value option set)
+            if (!string.IsNullOrWhiteSpace(p.RaceValues))
+            {
+                var raceCodes = ParseIntList(p.RaceValues);
+                if (raceCodes.Count > 0)
+                    qe.Criteria.AddCondition(ColRace,
+                        ConditionOperator.ContainValues, raceCodes.ToArray());
+            }
+
+            // DOB range — BUG FIX #8: UTC
+            if (!string.IsNullOrWhiteSpace(p.Dob) && TryParseDob(p.Dob, out var dob))
+            {
+                var dobUtc = DateTime.SpecifyKind(dob, DateTimeKind.Utc);
+                qe.Criteria.AddCondition(ColDob, ConditionOperator.GreaterEqual, dobUtc.Date);
+                qe.Criteria.AddCondition(ColDob, ConditionOperator.LessEqual,
+                    dobUtc.Date.AddDays(1).AddTicks(-1));
+            }
+        }
+
+        private void AddPhoneJoin(QueryExpression qe, SearchInputParameters p)
+        {
+            if (string.IsNullOrWhiteSpace(p.PhoneNumber)) return;
+            var lnk = qe.AddLink(TblPhone, TblContact + "id",
+                ColPhonePersonRef, JoinOperator.Inner);
+            lnk.LinkCriteria.AddCondition(ColPhoneNumber,
+                ConditionOperator.Equal, p.PhoneNumber);
+        }
+
+        private void AddAddressJoin(QueryExpression qe, SearchInputParameters p)
+        {
+            bool hasAddr = !string.IsNullOrWhiteSpace(p.AddressLine1)
+                        || !string.IsNullOrWhiteSpace(p.AddressLine2)
+                        || !string.IsNullOrWhiteSpace(p.City)
+                        || !string.IsNullOrWhiteSpace(p.State)
+                        || !string.IsNullOrWhiteSpace(p.ZipCode)
+                        || !string.IsNullOrWhiteSpace(p.County);
+            if (!hasAddr) return;
+
+            var lnk = qe.AddLink(TblAddress, TblContact + "id",
+                ColAddrPersonRef, JoinOperator.Inner);
+
+            if (!string.IsNullOrWhiteSpace(p.AddressLine1))
+                lnk.LinkCriteria.AddCondition(ColAddrLine1,
+                    ConditionOperator.Contains, p.AddressLine1);
+            if (!string.IsNullOrWhiteSpace(p.AddressLine2))
+                lnk.LinkCriteria.AddCondition(ColAddrLine2,
+                    ConditionOperator.Contains, p.AddressLine2);
+            if (!string.IsNullOrWhiteSpace(p.City))
+                lnk.LinkCriteria.AddCondition(ColAddrCity,
+                    ConditionOperator.Equal, p.City);
+            if (!string.IsNullOrWhiteSpace(p.State))
+                lnk.LinkCriteria.AddCondition(ColAddrState,
+                    ConditionOperator.Equal, p.State.ToUpperInvariant());
+            if (!string.IsNullOrWhiteSpace(p.ZipCode))
+                lnk.LinkCriteria.AddCondition(ColAddrZip,
+                    ConditionOperator.Equal, p.ZipCode);
+            if (!string.IsNullOrWhiteSpace(p.County))
+                lnk.LinkCriteria.AddCondition(ColAddrCounty,
+                    ConditionOperator.Contains, p.County);
+        }
+
+        // ═════════════════════════════════════════════════════════════════════
+        // HYDRATE — build flat result list
+        // ═════════════════════════════════════════════════════════════════════
+        private List<PersonSearchResult> HydrateResults(IOrganizationService svc,
+                                                          IEnumerable<Entity> contacts)
+        {
+            var results = new List<PersonSearchResult>();
+            var seen    = new HashSet<Guid>();
+
+            foreach (var contact in contacts)
+            {
+                if (!seen.Add(contact.Id)) continue;
+
+                // Address lookup
+                var addrQe = new QueryExpression(TblAddress)
+                {
+                    ColumnSet = new ColumnSet(ColAddrLine1, ColAddrLine2,
+                                              ColAddrCity,  ColAddrState,
+                                              ColAddrZip,   ColAddrCounty),
+                    TopCount  = 1,
+                    NoLock    = true
+                };
+                addrQe.Criteria.AddCondition(ColAddrPersonRef,
+                    ConditionOperator.Equal, contact.Id);
+                var addrs = svc.RetrieveMultiple(addrQe).Entities;
+
+                string fullAddress = null;
+                if (addrs.Count > 0)
+                {
+                    var a  = addrs[0];
+                    var sb = new StringBuilder();
+                    AppendPart(sb, a, ColAddrLine1);
+                    AppendPart(sb, a, ColAddrLine2);
+                    AppendPart(sb, a, ColAddrCity);
+                    AppendPart(sb, a, ColAddrState);
+                    AppendPart(sb, a, ColAddrZip);
+                    fullAddress = sb.ToString().TrimEnd(',', ' ');
+                }
+
+                // DOB
+                string dobStr = null;
+                if (contact.Contains(ColDob))
+                    dobStr = contact.GetAttributeValue<DateTime>(ColDob)
+                                    .ToLocalTime()
+                                    .ToString("MM/dd/yyyy");
+
+                // Sex label
+                string sexLabel = null;
+                if (contact.Contains(ColSex))
+                {
+                    var osv = contact.GetAttributeValue<OptionSetValue>(ColSex);
+                    if (osv != null)
+                        sexLabel = osv.Value == 471560000 ? "Male"
+                                 : osv.Value == 471560001 ? "Female"
+                                 : osv.Value == 471560002 ? "Unknown"
+                                 : osv.Value.ToString();
+                }
+
+                var fn = contact.GetAttributeValue<string>(ColFirstName)  ?? "";
+                var ln = contact.GetAttributeValue<string>(ColLastName)   ?? "";
+
+                results.Add(new PersonSearchResult
+                {
+                    PersonId    = contact.Id.ToString(),
+                    DisplayName = $"{fn} {ln}".Trim(),
+                    Dob         = dobStr,
+                    SexLabel    = sexLabel,
+                    FullAddress = fullAddress
+                });
+            }
+            return results;
+        }
+
+        private static void AppendPart(StringBuilder sb, Entity e, string col)
+        {
+            var v = e.GetAttributeValue<string>(col);
+            if (!string.IsNullOrWhiteSpace(v))
+            {
+                if (sb.Length > 0) sb.Append(", ");
+                sb.Append(v.Trim());
+            }
+        }
+
+        // ═════════════════════════════════════════════════════════════════════
+        // UTILITY HELPERS
+        // ═════════════════════════════════════════════════════════════════════
+        private QueryExpression BuildBaseQuery() =>
+            new QueryExpression(TblContact)
+            {
+                ColumnSet = new ColumnSet(ColFirstName, ColLastName, ColDob,
+                                          ColSsn, ColSex, ColRace),
+                TopCount  = MaxResults,
+                NoLock    = true
+            };
+
+        private static SearchInputParameters ExtractParameters(IPluginExecutionContext ctx)
+        {
+            T Get<T>(string key) =>
+                ctx.InputParameters.Contains(key) ? (T)ctx.InputParameters[key] : default;
+
+            return new SearchInputParameters
+            {
+                FirstName    = Get<string>("cw_firstname"),
+                LastName     = Get<string>("cw_lastname"),
+                Dob          = Get<string>("cw_dob"),
+                PersonId     = Get<string>("cw_personid"),
+                Ssn          = Get<string>("cw_ssn"),
+                PhoneNumber  = Get<string>("cw_phonenumber"),
+                AddressLine1 = Get<string>("cw_addressline1"),
+                AddressLine2 = Get<string>("cw_addressline2"),
+                City         = Get<string>("cw_city"),
+                State        = Get<string>("cw_state"),
+                ZipCode      = Get<string>("cw_zipcode"),
+                County       = Get<string>("cw_county"),
+                Gender       = Get<string>("cw_gender"),
+                RaceValues   = Get<string>("cw_racevalues"),
+                IsExactMatch = Get<bool>("cw_isexactmatch")
+            };
+        }
+
+        private static bool TryParseDob(string raw, out DateTime result)
+        {
+            result = default;
+            string[] fmts = { "MM/dd/yyyy", "M/d/yyyy", "yyyy-MM-dd" };
+            return DateTime.TryParseExact(raw.Trim(), fmts,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out result);
+        }
+
+        private static List<int> ParseIntList(string csv)
+        {
+            var list = new List<int>();
+            if (string.IsNullOrWhiteSpace(csv)) return list;
+            foreach (var part in csv.Split(','))
+                if (int.TryParse(part.Trim(), out var v)) list.Add(v);
+            return list;
+        }
+    }
+}
+```
+
+---
+
+---
+
+## PART E — POWER AUTOMATE FLOWS
+
+You need **two flows**:
+
+| Flow | Purpose | Run frequency |
+|---|---|---|
+| Flow 1: `ALPT2635 - Soundex Backfill` | Populate Soundex columns on all existing cw_contact records | ONE TIME manually |
+| Flow 2: `ALPT2635 - Advanced Person Search` | Execute search from Power Apps (alternative to Custom API) | Every search |
+
+---
+
+### FLOW 1 — Soundex Backfill Flow *(One-time run)*
+
+#### How it works:
+Power Automate updates each existing `cw_contact` record with its own first/last name → this triggers `PersonSoundexPlugin` → plugin computes and saves Soundex.
+
+#### Step-by-step setup:
+
+**1. Create the flow**
+- `make.powerautomate.com` → **+ Create** → **Instant cloud flow**
+- Name: `ALPT2635 - Soundex Backfill`
+- Trigger: **Manually trigger a flow**
+- Click **Create**
+
+**2. Add: Initialize variable — Page number**
+- Click **+ New step** → search `Initialize variable`
+- Name: `varPageNumber`
+- Type: `Integer`
+- Value: `1`
+
+**3. Add: Initialize variable — Has more pages**
+- `Initialize variable`
+- Name: `varHasMore`
+- Type: `Boolean`
+- Value: `true`
+
+**4. Add: Initialize variable — Total processed**
+- `Initialize variable`
+- Name: `varProcessed`
+- Type: `Integer`
+- Value: `0`
+
+**5. Add: Do until loop**
+- Search `Do until`
+- **Choose a value**: `varHasMore`
+- **Condition**: `is equal to`
+- **Value**: `false`
+
+**6. Inside Do until — Add: List rows (Dataverse)**
+- Search `List rows` → choose **Microsoft Dataverse**
+- Table name: `cw_contact` (search and select)
+- **Advanced options:**
+  - Select columns: `cw_contactid,cw_firstname,cw_lastname`
+  - Row count: `500`
+  - Skip count: `mul(sub(variables('varPageNumber'), 1), 500)` ← expression
+  - Sort by: `createdon asc`
+
+**7. Inside Do until — Add: Condition — check if any rows returned**
+- Search `Condition`
+- **Choose a value** → click expression tab → type: `length(outputs('List_rows')?['body/value'])`
+- **Condition**: `is greater than`
+- **Value**: `0`
+
+**8. Inside Condition — YES branch: Apply to each**
+- Search `Apply to each`
+- **Select an output from previous steps**: `body/value` from the List rows step
+
+**9. Inside Apply to each — Add: Update a row (Dataverse)**
+- Search `Update a row` → **Microsoft Dataverse**
+- Table name: `cw_contact`
+- Row ID: `cw_contactid` (from dynamic content: Current item → cw_contactid)
+- **Show advanced options**:
+  - First Name `cw_firstname`: *(dynamic content → current item → cw_firstname)*
+  - Last Name `cw_lastname`: *(dynamic content → current item → cw_lastname)*
+
+> This update with the same values triggers PersonSoundexPlugin's Update step, which computes and saves the Soundex columns automatically.
+
+**10. Inside Apply to each — Add: Increment variable**
+- Variable name: `varProcessed`
+- Value: `1`
+
+**11. After Apply to each (still in YES branch) — Increment page**
+- `Increment variable`
+- Variable: `varPageNumber`
+- Value: `1`
+
+**12. In NO branch (empty page returned) — Set varHasMore to false**
+- `Set variable`
+- Name: `varHasMore`
+- Value: `false`
+
+**13. Add final notification step**
+- Search `Compose`
+- Inputs: `Backfill complete. Total records processed: @{variables('varProcessed')}`
+
+**14. Save the flow**
+
+#### Run it:
+- **My flows** → click `ALPT2635 - Soundex Backfill` → **Run** → **Run flow**
+- Monitor: Click the run → watch each Apply to each iteration
+- When complete, spot-check: Open any cw_contact record → verify `cw_soundexfirstname` is populated (e.g., "S530" for "Smith")
+
+---
+
+### FLOW 2 — Advanced Person Search Flow *(Called from Power Apps)*
+
+> Use this as the **search engine** from Power Apps — replaces the Custom API + C# plugin approach if you prefer full PA.
+
+#### Step-by-step setup:
+
+**1. Create the flow**
+- **+ Create** → **Instant cloud flow**
+- Name: `ALPT2635 - Advanced Person Search`
+- Trigger: **Power Apps (V2)**
+- Click **Create**
+
+**2. Configure trigger inputs (14 parameters)**
+
+In the trigger, click **+ Add an input** for each:
+
+| Name | Type |
+|---|---|
+| `FirstName` | Text |
+| `LastName` | Text |
+| `DateOfBirth` | Text |
+| `PersonId` | Text |
+| `SSN` | Text |
+| `PhoneNumber` | Text |
+| `AddressLine1` | Text |
+| `City` | Text |
+| `State` | Text |
+| `ZipCode` | Text |
+| `County` | Text |
+| `Gender` | Text |
+| `RaceValues` | Text |
+| `IsExactMatch` | Yes/No |
+
+**3. Add: Initialize variable — OData Filter**
+- Name: `varODataFilter`
+- Type: `String`
+- Value: *(leave blank — we build it below)*
+
+**4. Add: Initialize variable — Soundex First**
+- Name: `varSoundexFirst`
+- Type: `String`
+- Value: *(blank)*
+
+**5. Add: Initialize variable — Soundex Last**
+- Name: `varSoundexLast`
+- Type: `String`
+- Value: *(blank)*
+
+**6. Add: Condition — IsExactMatch**
+- Check: `triggerBody()?['IsExactMatch']` is equal to `true`
+
+---
+
+#### YES branch (Exact Match):
+
+**7a. Add: List rows — exact match**
+- Table: `cw_contact`
+- Filter rows OData expression:
+```
+@{if(not(empty(triggerBody()?['FirstName'])), concat('cw_firstname eq ''', triggerBody()?['FirstName'], ''' and '), '')}@{if(not(empty(triggerBody()?['LastName'])), concat('cw_lastname eq ''', triggerBody()?['LastName'], ''' and '), '')}1 eq 1
+```
+- Select columns: `cw_contactid,cw_firstname,cw_lastname,cw_dateofbirth,cw_sex,cw_soundexfirstname`
+- Row count: `200`
+
+---
+
+#### NO branch (Fuzzy/Phonetic Match):
+
+> Power Automate does not have Soundex built-in. We handle this by querying the pre-computed Soundex columns. For search-time Soundex computation of the INPUT term, we use a child flow OR we call the PA flow with a helper expression.
+
+**Practical approach for Soundex computation in PA:**
+
+Add a **Scope** named `Compute Soundex` with these expressions:
+
+**7b-1. Add: Compose — Soundex of FirstName**
+- Name: `CompSoundexFirst`
+- Inputs (expression — this is a simplified Soundex expression):
+```
+if(empty(triggerBody()?['FirstName']), '', 
+   toUpper(substring(trim(triggerBody()?['FirstName']), 0, 1)))
+```
+> ⚠️ **Full Soundex is complex in Power Automate expressions.** Use the approach below instead: query both the Contains AND the Soundex column with a wildcard (most practical in PA).
+
+**Better PA Fuzzy approach — two parallel List rows:**
+
+**7b-1. Add: List rows — Contains name search**
+- Table: `cw_contact`
+- Filter rows:
+```
+contains(cw_firstname, '@{triggerBody()?['FirstName']}') or contains(cw_lastname, '@{triggerBody()?['LastName']}')
+```
+- Select columns: `cw_contactid`
+- Row count: `200`
+- Name this step: `ListRows_Contains`
+
+**7b-2. Add: Select — extract IDs from contains results**
+- From: `outputs('ListRows_Contains')?['body/value']`
+- Map — Key: `id`, Value: `item()?['cw_contactid']`
+
+**7b-3. Add: List rows — Get all records (for manual Soundex join)**
+
+> Since PA can't compute Soundex at query time, the phonetic search uses the pre-computed column differently:
+
+Since computing Soundex of the INPUT in PA is complex, the **recommended approach** is:
+
+Use **one merged query** — for fuzzy mode, use `contains` on both name fields:
+```
+contains(cw_firstname, '@{triggerBody()?['FirstName']}') or 
+contains(cw_lastname, '@{triggerBody()?['LastName']}') or 
+cw_soundexfirstname eq '@{triggerBody()?['FirstName']}' or 
+cw_soundexlastname eq '@{triggerBody()?['LastName']}'
+```
+
+> ⚠️ The last two conditions only match if the INPUT happens to equal the Soundex code. For proper phonetic search in PA, use the **C# plugin approach** (AdvancedPersonSearchPlugin already handles this correctly). That's why we still recommend the Custom API + C# plugin for best AC3 coverage.
+
+**For the PA search flow, the full filter expression:**
+
+**8. Add: Compose — Build OData filter**
+```
+@{if(triggerBody()?['IsExactMatch'], 
+  concat(
+    if(not(empty(triggerBody()?['FirstName'])), concat('cw_firstname eq ''', triggerBody()?['FirstName'],''' and '),''),
+    if(not(empty(triggerBody()?['LastName'])), concat('cw_lastname eq ''', triggerBody()?['LastName'],''' and '),''),
+    if(not(empty(triggerBody()?['DateOfBirth'])), concat('cw_dateofbirth eq ''', triggerBody()?['DateOfBirth'],''' and '),''),
+    if(not(empty(triggerBody()?['SSN'])), concat('endswith(cw_ssn,''', triggerBody()?['SSN'],''') and '),''),
+    if(not(empty(triggerBody()?['Gender'])), concat('cw_sex eq ', triggerBody()?['Gender'],' and '),''),
+    '1 eq 1'
+  ),
+  concat(
+    if(not(empty(triggerBody()?['FirstName'])), concat('(contains(cw_firstname,''', triggerBody()?['FirstName'],''') or contains(cw_lastname,''', triggerBody()?['FirstName'],''')) and '),''),
+    if(not(empty(triggerBody()?['LastName'])), concat('(contains(cw_lastname,''', triggerBody()?['LastName'],''') or contains(cw_firstname,''', triggerBody()?['LastName'],''')) and '),''),
+    '1 eq 1'
+  )
+)}
+```
+
+**9. Add: List rows — Main search**
+- Table: `cw_contact`
+- Filter rows: `outputs('Compose_Build_OData_Filter')`
+- Select columns: `cw_contactid,cw_firstname,cw_lastname,cw_dateofbirth,cw_sex`
+- Row count: `200`
+
+**10. Add: Select — Build result array**
+- From: `body/value` of List rows
+- Map:
+  - `personId` → `item()?['cw_contactid']`
+  - `displayName` → `concat(item()?['cw_firstname'], ' ', item()?['cw_lastname'])`
+  - `dob` → `item()?['cw_dateofbirth']`
+  - `sexLabel` → `if(equals(string(item()?['cw_sex']), '471560000'), 'Male', if(equals(string(item()?['cw_sex']), '471560001'), 'Female', 'Unknown'))`
+  - `fullAddress` → *(leave blank — address lookup adds too much complexity in PA loops)*
+
+**11. Add: Compose — Build final JSON response**
+```json
+{
+  "success": true,
+  "results": @{outputs('Select_Build_result_array')},
+  "totalCount": @{length(outputs('Select_Build_result_array'))},
+  "errorMessage": ""
+}
+```
+
+**12. Add: Respond to a PowerApp or flow**
+- Status Code: `200`
+- Add output → `SearchResults` (Text) → `outputs('Compose_Build_final_JSON_response')`
+
+**13. Save the flow**
+
+---
+
+## PART C (UPDATED) — POWER APPS FORMULA CHANGES
+
+### Only one formula changes — `btnSearch.OnSelect` Step 4
+
+Replace the Custom API call block with the Power Automate flow call:
+
+```javascript
+// OPTION A: Keep Custom API (recommended — better phonetic search)
+// Uses: 'YourEnvironmentName'.cw_AdvancedPersonSearch({...})
+// → same as before, no changes needed
+
+// OPTION B: Call Power Automate flow instead
+// Replace the With({searchResponse: 'YourEnv'.cw_AdvancedPersonSearch(...)}) block with:
+
+With(
+    {
+        flowResponse: 'ALPT2635-AdvancedPersonSearch'.Run(
+            var_fn,          // FirstName
+            var_ln,          // LastName
+            var_dobRaw,      // DateOfBirth
+            var_pidRaw,      // PersonId
+            var_ssn,         // SSN
+            var_phoneDigits, // PhoneNumber
+            var_addr1,       // AddressLine1
+            var_city,        // City
+            var_state,       // State
+            var_zip,         // ZipCode
+            var_county,      // County
+            If(!IsBlank(cmbGender.Selected.Code), Text(cmbGender.Selected.Code), ""),
+            Concat(cmbRace.SelectedItems, Text(Code), ","),
+            tglExactMatch.Value
+        )
+    },
+    ClearCollect(
+        colAPS_Results_Flat,
+        ForAll(
+            Table(ParseJSON(flowResponse.SearchResults).results),
+            {
+                PersonID:    Text(ThisRecord.personId),
+                DisplayName: Text(ThisRecord.displayName),
+                DOB:         Text(ThisRecord.dob),
+                SexLabel:    Text(ThisRecord.sexLabel),
+                FullAddress: Text(ThisRecord.fullAddress)
+            }
+        )
+    );
+    Set(TotalPages,
+        If(CountRows(colAPS_Results_Flat) = 0, 1,
+           RoundUp(CountRows(colAPS_Results_Flat) / PageSize, 0)));
+    Set(CurrentPage, 1)
+);
+If(IsBlank(varAPS_Error), Navigate(PersonResultsScreen, ScreenTransition.Fade));
+Set(varIsSearching, false)
+```
+
+**To get the flow name used in Power Apps:**
+- In Power Apps Studio → Data panel → **+ Add data** → search `Power Automate` → find your flow → the name shown is what you use in the `.Run()` call
+
+---
+
+---
+
+## PART D (REVISED) — COMPLETE STEP-BY-STEP IMPLEMENTATION PHASES
+
+```
+PHASE 0  ✅ DONE — Add Soundex columns to cw_contact
+PHASE 1  — Visual Studio — Build C# plugins (5 files)
+PHASE 2  — Dataverse — Create Custom API
+PHASE 3  — Plugin Registration Tool — Register assembly + steps
+PHASE 4  — Power Automate — Build Backfill Flow + run once
+PHASE 5  — Power Apps — Update formulas
+PHASE 6  — Power Automate — Build Search Flow (if not using Custom API)
+PHASE 7  — Verification
+```
+
+---
+
+### PHASE 0 ✅ — Already Done
+Columns `cw_soundexfirstname` and `cw_soundexlastname` added to `cw_contact`. Published. ✅
+
+---
+
+### PHASE 1 — Visual Studio Project Build
+
+#### 1.1 Create project on new laptop
+1. Open Visual Studio 2022
+2. **File** → **New** → **Project** → **Class Library (.NET Framework)**
+3. Name: `ALPT2635.Plugins`
+4. Framework: **.NET Framework 4.6.2** → Create
+
+#### 1.2 Sign the assembly
+1. Project → **Properties** → **Signing** tab
+2. ☑ **Sign the assembly**
+3. **New key file** → Name: `ALPT2635.Plugins` → Password: blank → OK
+
+#### 1.3 Install NuGet package
+Tools → NuGet Package Manager → Package Manager Console:
+```powershell
+Install-Package Microsoft.CrmSdk.CoreAssemblies
+```
+
+#### 1.4 Delete the default Class1.cs
+Right-click `Class1.cs` → Delete
+
+#### 1.5 Create folder structure
+Right-click Project → Add → New Folder → `Helpers`
+
+#### 1.6 Create the 5 files
+For each file below, right-click the correct folder → **Add** → **New Item** → **Class** → paste the code from Part B:
+
+| File | Location |
+|---|---|
+| `SearchModels.cs` | `Helpers/` folder |
+| `SoundexHelper.cs` | `Helpers/` folder |
+| `PersonSoundexPlugin.cs` | Root |
+| `AdvancedPersonSearchPlugin.cs` | Root |
+
+#### 1.7 Build
+1. Change dropdown from **Debug** → **Release**
+2. **Build** → **Build Solution**
+3. ✅ Expected: `0 errors` — Output: `bin\Release\ALPT2635.Plugins.dll`
+
+> If you see errors, the most common causes:
+> - Wrong .NET framework version → check Project Properties → Application → Target framework = 4.6.2
+> - NuGet not installed → rerun `Install-Package Microsoft.CrmSdk.CoreAssemblies`
+
+---
+
+### PHASE 2 — Dataverse Custom API Setup
+
+#### 2.1 Create Custom API
+
+1. `make.powerapps.com` → your environment → **Solutions** → open your solution
+2. **+ New** → **More** → **Custom API**
+
+| Field | Value |
+|---|---|
+| Unique Name | `cw_AdvancedPersonSearch` |
+| Display Name | `Advanced Person Search` |
+| Binding Type | `Global` |
+| Is Function | `No` |
+
+3. Save
+
+#### 2.2 Add 15 Request Parameters
+
+Click **+ New Custom API Request Parameter** for each row:
+
+| Unique Name | Type | Is Required |
+|---|---|---|
+| `cw_firstname` | String | No |
+| `cw_lastname` | String | No |
+| `cw_dob` | String | No |
+| `cw_personid` | String | No |
+| `cw_ssn` | String | No |
+| `cw_phonenumber` | String | No |
+| `cw_addressline1` | String | No |
+| `cw_addressline2` | String | No |
+| `cw_city` | String | No |
+| `cw_state` | String | No |
+| `cw_zipcode` | String | No |
+| `cw_county` | String | No |
+| `cw_gender` | String | No |
+| `cw_racevalues` | String | No |
+| `cw_isexactmatch` | Boolean | No |
+
+#### 2.3 Add 3 Response Properties
+
+| Unique Name | Type |
+|---|---|
+| `cw_searchresults` | String |
+| `cw_success` | Boolean |
+| `cw_errormessage` | String |
+
+#### 2.4 Publish All Customizations
+
+---
+
+### PHASE 3 — Plugin Registration Tool
+
+#### 3.1 Open XrmToolBox → Plugin Registration Tool
+1. Open XrmToolBox → connect to your environment
+2. Click **Plugin Registration Tool**
+
+#### 3.2 Register the assembly
+1. **Register** → **Register New Assembly**
+2. Browse to: `ALPT2635.Plugins\bin\Release\ALPT2635.Plugins.dll`
+3. **Isolation Mode**: Sandbox
+4. **Location**: Database
+5. Click **Register Selected Plugins**
+
+You should see two plugins listed:
+- `ALPT2635.Plugins.PersonSoundexPlugin`
+- `ALPT2635.Plugins.AdvancedPersonSearchPlugin`
+
+#### 3.3 Register steps for PersonSoundexPlugin
+
+**Step A — Create:**
+
+Right-click `PersonSoundexPlugin` → **Register New Step**
+
+| Field | Value |
+|---|---|
+| Message | `Create` |
+| Primary Entity | `cw_contact` |
+| Stage | `Post-operation` (40) |
+| Execution Mode | `Asynchronous` |
+| Deployment | `Server` |
+
+Click **Register New Step**
+
+**Step B — Update:**
+
+Right-click `PersonSoundexPlugin` → **Register New Step**
+
+| Field | Value |
+|---|---|
+| Message | `Update` |
+| Primary Entity | `cw_contact` |
+| **Filtering Attributes** | `cw_firstname,cw_lastname` |
+| Stage | `Post-operation` (40) |
+| Execution Mode | `Asynchronous` |
+| Deployment | `Server` |
+
+Click **Register New Step**
+
+#### 3.4 Register Pre-Image on the Update step
+
+1. Expand the Update step → right-click it → **Register New Image**
+
+| Field | Value |
+|---|---|
+| Image Type | `Pre Image` |
+| Name | `PreImage` |
+| Entity Alias | `PreImage` |
+| **Attributes** | `cw_firstname,cw_lastname,cw_soundexfirstname,cw_soundexlastname` |
+
+Click **Register Image**
+
+#### 3.5 Register step for AdvancedPersonSearchPlugin
+
+Right-click `AdvancedPersonSearchPlugin` → **Register New Step**
+
+| Field | Value |
+|---|---|
+| Message | `cw_AdvancedPersonSearch` |
+| Primary Entity | *(leave blank — unbound)* |
+| Stage | `Pre-operation` (20) |
+| Execution Mode | `Synchronous` |
+| Deployment | `Server` |
+| Secure Configuration | *(leave blank — no OAuth needed anymore)* |
+
+Click **Register New Step**
+
+#### 3.6 Link plugin to Custom API
+
+1. `make.powerapps.com` → your solution → Custom APIs → `cw_AdvancedPersonSearch`
+2. **Plugin Type**: select `ALPT2635.Plugins.AdvancedPersonSearchPlugin`
+3. Save → **Publish All Customizations**
+
+---
+
+### PHASE 4 — Power Automate: Backfill Flow
+
+Follow the steps in **Flow 1** above (Part E). After building:
+
+1. **Save** the flow
+2. Click **Test** → **Manually** → **Test**
+3. Click **Run flow** → monitor execution
+4. After completion, spot-check 3 records:
+   - Open `make.powerapps.com` → Tables → `cw_contact` → edit any row
+   - Confirm `cw_soundexfirstname` = expected value (e.g., `J500` for `John`)
+
+---
+
+### PHASE 5 — Power Apps Setup
+
+#### 5.1 Enable ParseJSON experimental feature
+Power Apps Studio → **Settings** → **Upcoming features** → **Experimental** → **ParseJSON function and untyped objects** → ON
+
+#### 5.2 Check your Dataverse connection name
+Data panel (left) → note the exact connector name shown (e.g., `(default)`, `IllinoisConnect`, `ALPT2635`)
+
+#### 5.3 Paste App.OnStart formula
+Select App → `OnStart` property → paste the `App.OnStart` formula from Part C
+
+> Verify the Race option set codes match your environment before saving
+
+#### 5.4 Paste btnSearch.OnSelect
+- **OPTION A** (recommended): Use the Custom API call formula from Part C, replacing `'YourEnvironmentName'` with your exact connection name
+- **OPTION B**: Use the Power Automate `.Run()` call formula from the updated Part C
+
+#### 5.5 Paste all other formulas
+Screen1.OnVisible, btnClear.OnSelect, Gallery properties, pagination, lblNoResults — all from Part C (unchanged)
+
+#### 5.6 Bind ComboBoxes
+- `cmbGender` → Items = `colGenderOptions`, Primary Text = `Label`
+- `cmbRace` → Items = `colRaceOptions`, Primary Text = `Label`, SelectMultiple = On
+
+#### 5.7 Save and publish
+**File** → **Save** → **Publish**
+
+---
+
+### PHASE 6 — Power Automate Search Flow (if using Option B)
+
+Follow the steps in **Flow 2** above (Part E). After building:
+
+1. In Power Apps Studio → Data panel → **+ Add data** → search Power Automate → find `ALPT2635 - Advanced Person Search` → Add
+2. The flow name appears — use it in `btnSearch.OnSelect`
+3. Test with a sample search
+
+---
+
+### PHASE 7 — Verification Checklist
+
+```
+SOUNDEX COLUMNS
+[ ] Open any cw_contact record → cw_soundexfirstname is populated
+[ ] "John" → J500, "Smith" → S530, "Fisher" → F260
+
+EXACT MATCH (toggle ON)
+[ ] Search "Smith" → returns only exact "Smith" records
+[ ] Search "John Smith" → returns exact match
+[ ] Search DOB "01/15/1980" → correct date match
+[ ] Search SSN last-4 "1234" → EndsWith match
+[ ] Search SSN full "123456789" → Equal match
+
+FUZZY/PHONETIC (toggle OFF)
+[ ] Search "Jhon" → returns "John" (Soundex J500 match)
+[ ] Search "Smyth" → returns "Smith" (Soundex S530 match)
+[ ] Search "Fischer" → returns "Fisher" (Soundex F260 match)
+[ ] Search "Jon" → returns "John" + "Jonathan" (Contains match)
+
+COMBINED FIELDS
+[ ] Name + Gender → correctly narrowed
+[ ] Name + Race (multi-select) → correctly narrowed
+[ ] Name + DOB → correct date intersection
+[ ] Name + Phone → phone join works
+[ ] Name + City → address join works
+
+EDGE CASES (validation)
+[ ] Enter "---" in First Name → error message shown
+[ ] Enter 8-digit SSN → error: enter 4 or 9 digits
+[ ] Enter 9-digit phone → error: minimum 10 digits
+[ ] Future DOB → error message shown
+[ ] No fields entered → error: at least one criterion
+[ ] Empty results → "No Matching Person Records Were Found"
+
+POWER APPS UI
+[ ] Gender dropdown shows: Male / Female / Unknown
+[ ] Race dropdown shows multiple-select options
+[ ] Results card shows: Name, DOB · Gender · Person ID, Address
+[ ] "View Details" button purple (RGBA 128,0,128)
+[ ] Pagination Previous/Next disable correctly at boundaries
+```
+
+---
+
+## QUICK REFERENCE — What Requires Azure AD vs Not
+
+| Component | Needs Azure AD? | Why |
+|---|---|---|
+| `PersonSoundexPlugin` | ❌ No | Uses only `IOrganizationService` |
+| `AdvancedPersonSearchPlugin` (revised) | ❌ No | Uses only `IOrganizationService` |
+| Custom API | ❌ No | Dataverse native feature |
+| Plugin Registration Tool | ❌ No | Uses your login credentials |
+| Power Automate Dataverse connector | ❌ No | Uses flow's Dataverse connection |
+| Power Apps Dataverse connector | ❌ No | Uses app user's credentials |
+| Dataverse Search API via HTTP | ✅ Yes | Requires OAuth bearer token — **removed** |
+
+---
+
+## Summary of Everything Delivered
+
+| | What | Status |
+|---|---|---|
+| **Table** | All code updated to `cw_contact` | ✅ |
+| **Soundex columns** | `cw_soundexfirstname` / `cw_soundexlastname` (lowercase) | ✅ |
+| **Azure AD** | Completely removed — zero dependency | ✅ |
+| **C# Files** | 5 files (removed TokenHelper + PluginConfig) | ✅ |
+| **PA Flow 1** | Soundex Backfill — one-time run, step-by-step | ✅ |
+| **PA Flow 2** | Search Flow — called from Power Apps (Option B) | ✅ |
+| **Power Apps** | Option A (Custom API) + Option B (PA flow) both provided | ✅ |
+| **Phases** | 0 (done) → 1→2→3→4→5→6→7 complete sequence | ✅ |
+
+**Next immediate step:** Phase 1 — Create the VS project on your new laptop and paste the 5 files. The build should produce `ALPT2635.Plugins.dll` with zero errors.
